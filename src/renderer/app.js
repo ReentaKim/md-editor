@@ -55,7 +55,10 @@ const el = {
 const tabs = [];
 /** @type {Tab} 현재 활성 탭 */
 let doc = null;
-const prefs = { viewMode: 'split', sidebar: true, syncScroll: true, autosave: false };
+const prefs = { viewMode: 'split', sidebar: true, syncScroll: true, autosave: false, theme: 'system' };
+/** 테마 버튼: 누를 때마다 시스템 → 라이트 → 다크 순서로 바뀐다. */
+const THEMES = { system: '시스템 설정 따르기', light: '라이트', dark: '다크' };
+const THEME_ORDER = Object.keys(THEMES);
 const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
 
 // ───────────────────────── 편집기 ─────────────────────────
@@ -837,6 +840,10 @@ function applyPrefs() {
   document.body.dataset.view = prefs.viewMode;
   document.body.dataset.sidebar = prefs.sidebar ? 'on' : 'off';
   document.querySelectorAll('[data-view-mode]').forEach((b) => b.classList.toggle('active', b.dataset.viewMode === prefs.viewMode));
+  const theme = THEMES[prefs.theme] ? prefs.theme : 'system';
+  const themeBtn = $('#theme-btn');
+  themeBtn.querySelector('use').setAttribute('href', `#i-theme-${theme}`);
+  themeBtn.title = `테마: ${THEMES[theme]} (누르면 바뀜)`;
   updateSaveStatus();
   requestAnimationFrame(() => {
     view.requestMeasure();
@@ -940,6 +947,11 @@ const commands = {
   },
   prevTab: () => cycleTab(-1),
   toggleSidebar: () => api.setSettings({ sidebar: !prefs.sidebar }),
+  cycleTheme: () => {
+    const next = THEME_ORDER[(THEME_ORDER.indexOf(prefs.theme) + 1) % THEME_ORDER.length];
+    api.setSettings({ theme: next });
+    toast(`테마: ${THEMES[next]}`);
+  },
   undo: () => (isEditorFocused() ? editorCommands.undo(view) : document.execCommand('undo')),
   redo: () => (isEditorFocused() ? editorCommands.redo(view) : document.execCommand('redo')),
   selectAll: () => (isEditorFocused() || prefs.viewMode !== 'preview' ? (view.focus(), editorCommands.selectAll(view)) : document.execCommand('selectAll')),
