@@ -42,6 +42,14 @@ contextBridge.exposeInMainWorld('api', {
   exportPdf: (tabId) => ipcRenderer.invoke('export:pdf', tabId),
   exportHtml: (tabId, html) => ipcRenderer.invoke('export:html', tabId, html),
 
+  // 업데이트
+  updateDownload: () => ipcRenderer.send('update:download'),
+  updateInstallNow: () => ipcRenderer.send('update:install-now'),
+  updateInstallLater: () => ipcRenderer.send('update:install-later'),
+  updateDismiss: () => ipcRenderer.send('update:dismiss'),
+  updateOpenPage: () => ipcRenderer.send('update:open-page'),
+  onUpdateState: (cb) => on('update:state', cb),
+
   // 설정
   setSettings: (patch) => ipcRenderer.send('settings:set', patch),
 

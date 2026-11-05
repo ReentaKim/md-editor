@@ -760,6 +760,54 @@ api.onSettings((patch) => {
 });
 darkQuery.addEventListener('change', () => render());
 
+// ───────────────────────── 업데이트 알림 카드 ─────────────────────────
+const updateCard = $('#update-card');
+function renderUpdate(s = {}) {
+  const v = escapeHtml(String(s.version || ''));
+  const card = (title, body, actions = '', extra = '') => {
+    updateCard.className = s.status === 'error' ? 'error' : '';
+    updateCard.innerHTML = `<svg class="uc-icon"><use href="#i-update"/></svg><div class="uc-title">${title}</div><div class="uc-body">${body}</div>${extra}${actions ? `<div class="uc-actions">${actions}</div>` : ''}`;
+    updateCard.hidden = false;
+  };
+  const btn = (action, label, primary = false) => `<button type="button" data-update="${action}"${primary ? ' class="primary"' : ''}>${label}</button>`;
+  switch (s.status) {
+    case 'checking':
+      return card('업데이트 확인 중…', 'GitHub에서 최신 버전을 확인하고 있습니다.');
+    case 'available':
+      return s.canInstall
+        ? card(`새 버전 v${v}`, `현재 v${escapeHtml(appVersion)} — 지금 업데이트할 수 있습니다.`, btn('download', '업데이트', true) + btn('notes', '변경 사항') + btn('dismiss', '나중에'))
+        : card(`새 버전 v${v}`, '이 환경에서는 자동 설치를 지원하지 않습니다. 릴리스 페이지에서 내려받아 주세요.', btn('notes', '다운로드 페이지', true) + btn('dismiss', '나중에'));
+    case 'downloading': {
+      const pct = s.progress == null ? null : Math.round(s.progress * 100);
+      return card(`v${v} 다운로드 중…${pct == null ? '' : ` ${pct}%`}`, '다운로드하는 동안 계속 작업할 수 있습니다.', '',
+        `<div class="uc-progress${pct == null ? ' indeterminate' : ''}" style="grid-column:2"><div style="width:${pct ?? 0}%"></div></div>`);
+    }
+    case 'verifying':
+      return card('파일 확인 중…', '받은 파일의 SHA-256과 앱 서명을 확인하고 있습니다.');
+    case 'ready':
+      return s.onQuit
+        ? card(`v${v} 설치 예약됨`, '앱을 종료하면 자동으로 설치됩니다.', btn('install-now', '지금 재시작', true))
+        : card(`v${v} 설치 준비 완료`, '재시작하면 새 버전으로 바뀝니다. 저장하지 않은 문서는 종료할 때 저장 여부를 묻습니다.', btn('install-now', '지금 재시작', true) + btn('install-later', '종료할 때 설치'));
+    case 'error':
+      return card('업데이트 실패', escapeHtml(s.message || '알 수 없는 오류'), btn('download', '다시 시도', true) + btn('notes', '다운로드 페이지') + btn('dismiss', '닫기'));
+    default:
+      updateCard.hidden = true;
+  }
+}
+let appVersion = '';
+updateCard.addEventListener('click', (e) => {
+  const action = e.target.closest('[data-update]')?.dataset.update;
+  const actions = {
+    download: api.updateDownload,
+    notes: api.updateOpenPage,
+    dismiss: api.updateDismiss,
+    'install-now': api.updateInstallNow,
+    'install-later': api.updateInstallLater,
+  };
+  actions[action]?.();
+});
+api.onUpdateState(renderUpdate);
+
 // ───────────────────────── 외부 변경 ─────────────────────────
 async function handleExternalChange(tab, content) {
   if (content === tabContent(tab)) {
@@ -804,9 +852,12 @@ api.onTabActivate((tabId) => activateTab(tabId));
 
 // ───────────────────────── 시작 ─────────────────────────
 (async () => {
-  const { settings, tabId } = await api.ready();
+  const { settings, tabId, update, updatedTo, version } = await api.ready();
+  appVersion = version;
   Object.assign(prefs, settings);
   applyPrefs();
   tabs.push(makeTab(tabId));
   activateTab(tabId);
+  renderUpdate(update);
+  if (updatedTo) toast(`v${updatedTo}(으)로 업데이트했습니다`);
 })();

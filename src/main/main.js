@@ -5,6 +5,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const fsp = fs.promises;
 const { pathToFileURL, fileURLToPath } = require('node:url');
+const updater = require('./updater');
 
 const MD_EXTENSIONS = ['md', 'markdown', 'mdown', 'mkd', 'mdx', 'txt'];
 const isMac = process.platform === 'darwin';
@@ -19,6 +20,7 @@ const settings = {
   sidebar: true,
   syncScroll: true,
   autosave: false,
+  autoUpdateCheck: true,
   windowBounds: { width: 1400, height: 900 },
 };
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
@@ -158,12 +160,14 @@ function createWindow(queue = []) {
       const answer = await confirmClose(win, tabName(t));
       if (answer === 'cancel') {
         quitting = false;
+        updater.quitCancelled();
         return;
       }
       if (answer === 'save') {
         const saved = await win.webContents.executeJavaScript(`window.__mdEditor.save(${t.id})`).catch(() => false);
         if (!saved) {
           quitting = false;
+          updater.quitCancelled();
           return;
         }
       }
@@ -365,8 +369,18 @@ ipcMain.handle('renderer-ready', (e) => {
   return {
     settings: { viewMode: settings.viewMode, sidebar: settings.sidebar, syncScroll: settings.syncScroll, autosave: settings.autosave, theme: settings.theme },
     tabId: first.id,
+    version: app.getVersion(),
+    update: updater.publicState(),
+    updatedTo: updater.takeInstalledNotice(),
   };
 });
+
+// ───────────────────────── 업데이트 IPC ─────────────────────────
+ipcMain.on('update:download', () => updater.download());
+ipcMain.on('update:install-now', () => updater.installNow());
+ipcMain.on('update:install-later', () => updater.installLater());
+ipcMain.on('update:dismiss', () => updater.dismiss());
+ipcMain.on('update:open-page', () => updater.openReleasePage());
 
 ipcMain.handle('tab:new', (e) => {
   const w = winOf(e.sender);
@@ -541,6 +555,13 @@ function buildMenu() {
             label: app.name,
             submenu: [
               { role: 'about', label: 'MD Editor 정보' },
+              { label: '업데이트 확인…', click: () => updater.check({ manual: true }) },
+              {
+                label: '자동으로 업데이트 확인',
+                type: 'checkbox',
+                checked: settings.autoUpdateCheck !== false,
+                click: (item) => setSetting({ autoUpdateCheck: item.checked }),
+              },
               { type: 'separator' },
               { role: 'services', label: '서비스' },
               { type: 'separator' },
@@ -686,6 +707,7 @@ if (!app.requestSingleInstanceLock()) {
     loadSettings();
     nativeTheme.themeSource = settings.theme;
     buildMenu();
+    updater.init({ settings });
     const argvFiles = process.argv.slice(app.isPackaged ? 1 : 2).filter((a) => fs.existsSync(a) && MD_EXTENSIONS.includes(path.extname(a).slice(1).toLowerCase()));
     const initial = [...pendingOpenPaths, ...argvFiles];
     createWindow(initial.map((f) => ({ filePath: path.resolve(f) })));
