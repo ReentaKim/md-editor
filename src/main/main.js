@@ -1,6 +1,6 @@
 // MD Editor — main process
 // 창 1개 = 탭 여러 개. 탭마다 파일 경로/변경 여부/파일 감시 상태를 main에서 관리한다.
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell, nativeTheme } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, shell, nativeTheme, screen } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const fsp = fs.promises;
@@ -77,7 +77,7 @@ const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'];
 
 // ───────────────────────── 창 / 탭 상태 ─────────────────────────
 /**
- * @typedef {{id:number, w:WinState, filePath:string|null, dirty:boolean, diskContent:string|null, ignoreUntil:number, blank:boolean, unwatch?:Function|null}} TabState
+ * @typedef {{id:number, w:WinState, filePath:string|null, dirty:boolean, diskContent:string|null, blank:boolean, unwatch?:Function|null}} TabState
  * @typedef {{win:BrowserWindow, tabs:Map<number,TabState>, activeTab:number|null, ready:boolean, queue:Array, forceClose:boolean}} WinState
  */
 /** @type {Map<number, WinState>} webContents.id → 창 상태 */
@@ -97,7 +97,7 @@ function targetWindow() {
 }
 
 function newTab(w) {
-  const tab = { id: ++tabSeq, w, filePath: null, dirty: false, diskContent: null, ignoreUntil: 0, blank: true, unwatch: null };
+  const tab = { id: ++tabSeq, w, filePath: null, dirty: false, diskContent: null, blank: true, unwatch: null };
   w.tabs.set(tab.id, tab);
   return tab;
 }
@@ -108,7 +108,7 @@ function reusableTab(w) {
 }
 
 /** @param {Array<{filePath?:string, content?:string, name?:string}>} queue 창이 준비되면 열 문서들 */
-function createWindow(queue = []) {
+function createWindow(queue = [], position = null) {
   const focused = BrowserWindow.getFocusedWindow();
   const { width, height } = settings.windowBounds;
   const win = new BrowserWindow({
@@ -129,7 +129,10 @@ function createWindow(queue = []) {
       spellcheck: false,
     },
   });
-  if (focused) {
+  if (position) {
+    // 탭을 창 밖으로 끌어 놓은 위치에 새 창을 띄운다(커서가 탭 바 근처에 오도록)
+    win.setPosition(Math.round(position.x - 160), Math.round(position.y - 60));
+  } else if (focused) {
     const [x, y] = focused.getPosition();
     win.setPosition(x + 28, y + 28);
   }
@@ -307,7 +310,6 @@ async function writeDoc(tab, content, saveAs) {
     if (canceled || !filePath) return null;
     target = filePath;
   }
-  tab.ignoreUntil = Date.now() + 1500; // 우리가 쓴 변경은 외부 변경으로 감지하지 않음
   await fsp.writeFile(target, content, 'utf8');
   const changedPath = target !== tab.filePath;
   Object.assign(tab, { filePath: target, diskContent: content, dirty: false, blank: false });
@@ -327,7 +329,9 @@ function watch(tab) {
   if (!file) return;
   const listener = async (curr, prev) => {
     const { win } = tab.w;
-    if (curr.mtimeMs === prev.mtimeMs || Date.now() < tab.ignoreUntil || win.isDestroyed()) return;
+    // 내가 저장한 변경은 아래에서 내용 비교(diskContent)로 걸러진다. 시간으로 무시하면
+    // 저장 직후 다른 프로그램이 바꾼 내용을 놓치므로 쓰지 않는다.
+    if (curr.mtimeMs === prev.mtimeMs || win.isDestroyed()) return;
     if (curr.nlink === 0) {
       win.webContents.send('doc:external-deleted', { tabId: tab.id });
       return;
@@ -374,7 +378,8 @@ ipcMain.handle('renderer-ready', (e) => {
   // 응답이 먼저 도착하도록 다음 틱에 대기 중인 문서를 연다
   setImmediate(async () => {
     for (const item of w.queue.splice(0)) {
-      if (item.filePath) await openPath(item.filePath, w);
+      if (item.moveTab) await moveTab(item.moveTab.from, item.moveTab.tabId, w, 0);
+      else if (item.filePath) await openPath(item.filePath, w);
       else openContent(w, item.content, item.name);
     }
   });
@@ -415,6 +420,69 @@ ipcMain.on('tab:closed', (e, tabId) => {
   updateTitle(w);
 });
 ipcMain.on('window:close', (e) => winOf(e.sender)?.win.close());
+// ───────────────────────── 탭을 다른 창으로 옮기기 ─────────────────────────
+let tabDrag = null; // { w, tabId } — 탭 끌기가 진행 중일 때
+
+/** 탭 상태(문서·실행 취소 기록·저장 여부·파일 감시)를 다른 창으로 옮긴다 */
+async function moveTab(fromW, tabId, toW, index = null) {
+  const tab = fromW?.tabs.get(tabId);
+  if (!tab || fromW === toW || toW.win.isDestroyed() || fromW.win.isDestroyed()) return false;
+  const data = await fromW.win.webContents.executeJavaScript(`window.__mdEditor.exportTab(${tabId})`).catch(() => null);
+  if (!data) return false;
+  fromW.tabs.delete(tabId);
+  await fromW.win.webContents.executeJavaScript(`window.__mdEditor.removeTab(${tabId})`).catch(() => {});
+  tab.w = toW; // 파일 감시 콜백은 tab.w를 매번 읽으므로 그대로 새 창으로 이어진다
+  tab.blank = false;
+  toW.tabs.set(tabId, tab);
+  toW.activeTab = tabId;
+  toW.win.webContents.send('tab:import', { data, index });
+  toW.win.show();
+  toW.win.focus();
+  if (fromW.tabs.size === 0) {
+    fromW.forceClose = true; // 남은 탭이 없으면 원래 창은 닫는다
+    fromW.win.close();
+  } else updateTitle(fromW);
+  updateTitle(toW);
+  return true;
+}
+
+/** 탭을 새 창으로 분리 (탭이 하나뿐인 창이면 의미가 없으므로 하지 않음) */
+function detachTab(fromW, tabId, position = null) {
+  if (!fromW?.tabs.has(tabId) || fromW.tabs.size < 2) return false;
+  createWindow([{ moveTab: { from: fromW, tabId } }], position);
+  return true;
+}
+
+const windowAt = (pt) =>
+  [...windows.values()].find((w) => {
+    if (w.win.isDestroyed() || !w.win.isVisible()) return false;
+    const b = w.win.getBounds();
+    return pt.x >= b.x && pt.x <= b.x + b.width && pt.y >= b.y && pt.y <= b.y + b.height;
+  });
+
+ipcMain.on('tab:drag-start', (e, tabId) => {
+  tabDrag = { w: winOf(e.sender), tabId };
+});
+ipcMain.handle('tab:drag-active', (e) => Boolean(tabDrag && tabDrag.w !== winOf(e.sender)));
+ipcMain.on('tab:drop-here', (e, index) => {
+  const to = winOf(e.sender);
+  if (!tabDrag || tabDrag.w === to) return;
+  const { w, tabId } = tabDrag;
+  tabDrag = null;
+  moveTab(w, tabId, to, index);
+});
+ipcMain.on('tab:drag-end', (e, tabId) => {
+  // 다른 창의 drop이 먼저 처리되도록 잠깐 기다린 뒤, 아무 창에도 놓이지 않았으면 새 창으로 분리
+  setTimeout(() => {
+    if (!tabDrag || tabDrag.tabId !== tabId) return;
+    const from = tabDrag.w;
+    tabDrag = null;
+    const pt = screen.getCursorScreenPoint();
+    if (!windowAt(pt)) detachTab(from, tabId, pt);
+  }, 150);
+});
+ipcMain.handle('tab:detach', (e, tabId) => detachTab(winOf(e.sender), tabId));
+
 ipcMain.handle('tab:confirm-close', (e, name) => confirmClose(winOf(e.sender).win, name));
 
 ipcMain.handle('doc:save', async (e, { tabId, content, saveAs }) => {
@@ -680,6 +748,8 @@ function buildMenu() {
       submenu: [
         { role: 'minimize', label: '최소화' },
         { role: 'zoom', label: '확대/축소' },
+        { type: 'separator' },
+        { label: '탭을 새 창으로 이동', click: () => send('detachTab') },
         { type: 'separator' },
         { label: '다음 탭', accelerator: 'Ctrl+Tab', click: () => send('nextTab') },
         { label: '이전 탭', accelerator: 'Ctrl+Shift+Tab', click: () => send('prevTab') },

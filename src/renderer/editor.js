@@ -1,7 +1,7 @@
 // CodeMirror 6 기반 마크다운 편집기 + 서식 명령
 import { EditorView, keymap, drawSelection, highlightActiveLine, dropCursor, rectangularSelection, crosshairCursor, placeholder } from '@codemirror/view';
 import { EditorState, EditorSelection } from '@codemirror/state';
-import { defaultKeymap, history, historyKeymap, indentWithTab, undo, redo, selectAll } from '@codemirror/commands';
+import { defaultKeymap, history, historyField, historyKeymap, indentWithTab, undo, redo, selectAll } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
 import { syntaxHighlighting, HighlightStyle, bracketMatching, indentOnInput } from '@codemirror/language';
@@ -105,6 +105,10 @@ export function createEditor(parent, { onChange, onScroll, onCursor, onPasteFile
 export function createState(view, text) {
   return EditorState.create({ doc: text, extensions: view.mdExtensions });
 }
+
+/** 탭을 다른 창으로 옮길 때: 문서·커서·실행 취소 기록을 JSON으로 */
+export const serializeState = (state) => state.toJSON({ history: historyField });
+export const deserializeState = (view, json) => EditorState.fromJSON(json, { extensions: view.mdExtensions }, { history: historyField });
 
 /** 외부 변경 반영: 실행 취소 가능한 하나의 변경으로 교체, 커서 위치 최대한 유지 */
 export function replaceDoc(view, text) {

@@ -1,5 +1,5 @@
 // MD Editor — renderer 진입점
-import { createEditor, createState, replaceDoc, applyFormat, editorCommands, toggleTaskAtLine } from './editor.js';
+import { createEditor, createState, serializeState, deserializeState, replaceDoc, applyFormat, editorCommands, toggleTaskAtLine } from './editor.js';
 import { renderMarkdown, renderMermaid, slugify } from './markdown.js';
 import previewCss from './preview.css';
 
@@ -468,7 +468,45 @@ function cycleTab(step) {
 window.__mdEditor = {
   save: (tabId) => save(false, { tabId }),
   activate: (tabId) => activateTab(tabId),
+  // 탭을 다른 창으로 옮길 때 main이 호출
+  exportTab: (tabId) => {
+    const tab = tabs.find((t) => t.id === tabId);
+    if (!tab) return null;
+    if (tab === doc) {
+      tab.state = view.state;
+      tab.editorScroll = view.scrollDOM.scrollTop;
+      tab.previewScroll = el.previewPane.scrollTop;
+    }
+    const { id, filePath, name, dirUrl, savedContent, dirty, editorScroll, previewScroll, pendingExternal } = tab;
+    return { tabId: id, filePath, name, dirUrl, savedContent, dirty, editorScroll, previewScroll, pendingExternal, state: serializeState(tab.state) };
+  },
+  removeTab: (tabId) => {
+    const index = tabs.findIndex((t) => t.id === tabId);
+    if (index < 0) return;
+    const [tab] = tabs.splice(index, 1);
+    if (!tabs.length) return void (doc = null); // 남은 탭이 없으면 main이 이 창을 닫는다
+    if (tab === doc) {
+      doc = null;
+      activateTab(tabs[Math.min(index, tabs.length - 1)].id);
+    } else renderTabs();
+  },
 };
+
+// 다른 창에서 옮겨 온 탭 받기
+api.onTabImport(({ data, index }) => {
+  // 아무것도 입력하지 않은 "제목 없음" 탭 하나뿐이면 그 자리를 대신한다
+  if (tabs.length === 1 && isBlank(tabs[0])) {
+    api.tabClosed(tabs[0].id);
+    tabs.length = 0;
+    doc = null;
+  }
+  const { tabId, state, ...fields } = data;
+  const tab = makeTab(tabId, { ...fields, state: deserializeState(view, state) });
+  const at = index == null ? (doc ? tabs.indexOf(doc) + 1 : tabs.length) : Math.max(0, Math.min(index, tabs.length));
+  tabs.splice(at, 0, tab);
+  activateTab(tabId);
+  toast(`"${tab.name}" 탭을 이 창으로 옮겼습니다`);
+});
 
 function updateHeader() {
   el.title.textContent = doc.name;
@@ -530,6 +568,7 @@ el.tabs.addEventListener('dragstart', (e) => {
   e.dataTransfer.effectAllowed = 'move';
   e.dataTransfer.setData('application/x-md-tab', String(draggingTabId));
   node.classList.add('dragging');
+  api.tabDragStart(draggingTabId); // 다른 창에 놓거나 창 밖에 놓는 경우를 main이 처리
 });
 el.tabs.addEventListener('dragover', (e) => {
   if (draggingTabId == null) return;
@@ -548,9 +587,53 @@ el.tabs.addEventListener('dragover', (e) => {
   el.tabs.querySelector(`.tab[data-id="${draggingTabId}"]`)?.classList.add('dragging');
 });
 el.tabs.addEventListener('dragend', () => {
+  if (draggingTabId != null) api.tabDragEnd(draggingTabId);
   draggingTabId = null;
   el.tabs.querySelector('.tab.dragging')?.classList.remove('dragging');
 });
+
+// 다른 창에서 끌려 온 탭 받기: 탭 바 위면 그 위치에, 그 밖이면 맨 끝에 넣는다
+let foreignTabDrag = false;
+const isTabDrag = (e) => [...(e.dataTransfer?.types || [])].includes('application/x-md-tab');
+window.addEventListener('dragenter', async (e) => {
+  if (draggingTabId != null || [...(e.dataTransfer?.types || [])].includes('Files')) return;
+  if (isTabDrag(e) || (await api.tabDragActive())) {
+    foreignTabDrag = true;
+    document.body.classList.add('tab-drop-target');
+  }
+}, true);
+window.addEventListener('dragover', (e) => {
+  if (draggingTabId != null || !(foreignTabDrag || isTabDrag(e))) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+}, true);
+window.addEventListener('dragleave', (e) => {
+  if (e.relatedTarget == null && foreignTabDrag) {
+    foreignTabDrag = false;
+    document.body.classList.remove('tab-drop-target');
+  }
+}, true);
+function tabDropIndex(e) {
+  const over = e.target.closest?.('.tab');
+  if (!over) return null;
+  const i = tabs.findIndex((t) => t.id === Number(over.dataset.id));
+  const rect = over.getBoundingClientRect();
+  return e.clientX > rect.left + rect.width / 2 ? i + 1 : i;
+}
+window.addEventListener('drop', (e) => {
+  if (draggingTabId != null && isTabDrag(e)) {
+    // 같은 창 안에서 끌다 편집기 등에 놓은 경우: 글자로 들어가지 않게 막기만 한다
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+  if (!(foreignTabDrag || isTabDrag(e))) return;
+  e.preventDefault();
+  e.stopPropagation();
+  foreignTabDrag = false;
+  document.body.classList.remove('tab-drop-target');
+  api.tabDropHere(tabDropIndex(e));
+}, true);
 
 // ───────────────────────── 이미지 붙여넣기 / 끌어놓기 ─────────────────────────
 async function insertImages(files, pos) {
@@ -749,6 +832,9 @@ const commands = {
   newTab: () => newTab(),
   closeTab: () => closeTab(),
   nextTab: () => cycleTab(1),
+  detachTab: async () => {
+    if (!(await api.tabDetach(doc.id))) toast('탭이 하나뿐이라 새 창으로 옮길 수 없습니다');
+  },
   prevTab: () => cycleTab(-1),
   toggleSidebar: () => api.setSettings({ sidebar: !prefs.sidebar }),
   undo: () => (isEditorFocused() ? editorCommands.undo(view) : document.execCommand('undo')),
