@@ -239,7 +239,8 @@ async function readDoc(filePath) {
 }
 
 /** 이미 열린 파일이면 그 탭으로 이동, 아니면 대상 창에 새 탭(빈 탭이면 재사용) */
-async function openPath(filePath, w = targetWindow()) {
+/** @param {{line:number, query:string}|null} reveal 열고 나서 이 줄의 검색어를 선택(최근 문서 검색 결과용) */
+async function openPath(filePath, w = targetWindow(), reveal = null) {
   filePath = path.resolve(filePath);
   for (const other of windows.values()) {
     for (const t of other.tabs.values()) {
@@ -247,6 +248,7 @@ async function openPath(filePath, w = targetWindow()) {
         other.win.show();
         other.win.focus();
         other.win.webContents.send('tab:activate', t.id);
+        if (reveal) other.win.webContents.send('tab:reveal', { tabId: t.id, ...reveal });
         return;
       }
     }
@@ -260,7 +262,9 @@ async function openPath(filePath, w = targetWindow()) {
   const reused = reusableTab(w);
   const tab = reused ?? newTab(w);
   // 새로 만든 탭인데 열기에 실패하면 렌더러는 그 탭을 모르므로 main에서만 지운다
-  if (!(await loadInto(tab, filePath)) && !reused) w.tabs.delete(tab.id);
+  const loaded = await loadInto(tab, filePath);
+  if (!loaded && !reused) w.tabs.delete(tab.id);
+  if (loaded && reveal) w.win.webContents.send('tab:reveal', { tabId: tab.id, ...reveal });
 }
 
 async function loadInto(tab, filePath) {
@@ -537,10 +541,47 @@ ipcMain.handle('recent:list', () =>
     };
   }),
 );
-ipcMain.handle('recent:open', (e, p) => {
+ipcMain.handle('recent:open', (e, p, reveal = null) => {
   if (!settings.recentFiles.includes(p)) return false;
-  openPath(p, winOf(e.sender));
+  const r = reveal && Number.isInteger(reveal.line) ? { line: reveal.line, query: String(reveal.query || '').slice(0, 200) } : null;
+  openPath(p, winOf(e.sender), r);
   return true;
+});
+
+// 최근 문서 내용 검색 — 최근 문서 목록에 있는 파일만 읽는다(폴더 탐색 없음)
+const SEARCH_MAX_BYTES = 2 * 1024 * 1024;
+const SEARCH_MAX_LINES_PER_FILE = 20;
+ipcMain.handle('recent:search', async (_e, rawQuery) => {
+  const query = String(rawQuery || '').normalize('NFC').trim().slice(0, 200);
+  if (!query) return [];
+  const re = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu');
+  const results = [];
+  for (const file of settings.recentFiles) {
+    try {
+      if (!isMarkdownPath(file)) continue;
+      const stat = await fsp.stat(file);
+      if (!stat.isFile() || stat.size > SEARCH_MAX_BYTES) continue;
+      const lines = (await fsp.readFile(file, 'utf8')).normalize('NFC').split(/\r?\n/);
+      const matches = [];
+      let total = 0;
+      lines.forEach((text, i) => {
+        re.lastIndex = 0;
+        const m = re.exec(text);
+        if (!m) return;
+        total++;
+        if (matches.length < SEARCH_MAX_LINES_PER_FILE) matches.push({ line: i, text: text.slice(0, 500), start: m.index, length: m[0].length });
+      });
+      // 파일 이름이 일치해도 결과에 넣는다
+      const nameHit = path.basename(file).normalize('NFC').toLocaleLowerCase().includes(query.toLocaleLowerCase());
+      if (total || nameHit) {
+        const dir = path.dirname(file);
+        results.push({ path: file, name: path.basename(file), dir: dir.startsWith(home) ? '~' + dir.slice(home.length) : dir, total, matches });
+      }
+    } catch {
+      /* 없는 파일·읽기 실패는 건너뜀 */
+    }
+  }
+  return results;
 });
 ipcMain.handle('recent:remove', (_e, p) => removeRecent(p));
 ipcMain.handle('recent:clear', () => {
@@ -689,6 +730,7 @@ function buildMenu() {
         { label: '전체 선택', accelerator: 'CmdOrCtrl+A', click: () => send('selectAll') },
         { type: 'separator' },
         { label: '찾기 / 바꾸기', accelerator: 'CmdOrCtrl+F', click: () => send('find') },
+        { label: '최근 문서에서 찾기', accelerator: 'CmdOrCtrl+Shift+F', click: () => send('searchRecent') },
       ],
     },
     {

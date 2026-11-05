@@ -259,6 +259,18 @@ export const editorCommands = {
   find: (v) => openSearchPanel(v),
 };
 
+/** 검색 결과로 이동: 해당 줄의 검색어를 선택하고 화면 가운데로 */
+export function revealMatch(view, lineIndex, query) {
+  const doc = view.state.doc;
+  const line = doc.line(Math.min(Math.max(lineIndex, 0), doc.lines - 1) + 1);
+  const text = line.text.normalize('NFC').toLocaleLowerCase();
+  const at = query ? text.indexOf(query.normalize('NFC').toLocaleLowerCase()) : -1;
+  const from = at >= 0 ? line.from + at : line.from;
+  const to = at >= 0 ? from + query.length : line.from;
+  view.dispatch({ selection: EditorSelection.range(from, to), effects: EditorView.scrollIntoView(from, { y: 'center' }) });
+  view.focus();
+}
+
 /** 미리보기의 체크박스 클릭 → 원본 줄의 [ ] ↔ [x] 토글 */
 export function toggleTaskAtLine(view, lineIndex) {
   const line = view.state.doc.line(lineIndex + 1);

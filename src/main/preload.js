@@ -35,7 +35,9 @@ contextBridge.exposeInMainWorld('api', {
 
   // 최근 문서 (폴더 탐색 API는 제공하지 않음)
   recentList: () => ipcRenderer.invoke('recent:list'),
-  recentOpen: (p) => ipcRenderer.invoke('recent:open', p),
+  recentOpen: (p, reveal = null) => ipcRenderer.invoke('recent:open', p, reveal),
+  recentSearch: (query) => ipcRenderer.invoke('recent:search', query),
+  onTabReveal: (cb) => on('tab:reveal', cb),
   recentRemove: (p) => ipcRenderer.invoke('recent:remove', p),
   recentClear: () => ipcRenderer.invoke('recent:clear'),
   onRecentChanged: (cb) => on('recent:changed', cb),

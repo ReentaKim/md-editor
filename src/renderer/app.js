@@ -1,5 +1,5 @@
 // MD Editor — renderer 진입점
-import { createEditor, createState, serializeState, deserializeState, replaceDoc, applyFormat, editorCommands, toggleTaskAtLine } from './editor.js';
+import { createEditor, createState, serializeState, deserializeState, revealMatch, replaceDoc, applyFormat, editorCommands, toggleTaskAtLine } from './editor.js';
 import { renderMarkdown, renderMermaid, slugify } from './markdown.js';
 import previewCss from './preview.css';
 
@@ -695,7 +695,8 @@ window.addEventListener(
 // 폴더 탐색은 제공하지 않는다. 사용자가 이미 연 적 있는 파일만 보여준다.
 async function loadRecent() {
   const items = await api.recentList();
-  $('#recent-clear').hidden = !items.length;
+  // 검색 결과를 보여 주는 중에는 '목록 지우기'를 숨긴다
+  $('#recent-clear').hidden = !items.length || document.querySelector('#search-results')?.hidden === false;
   if (!items.length) {
     el.recentList.innerHTML = '<li class="sb-empty">최근에 연 문서가 여기에 표시됩니다.<br/>⌘O로 파일을 열거나 창에 끌어다 놓으세요.</li>';
     return;
@@ -721,6 +722,107 @@ async function loadRecent() {
   );
 }
 $('#recent-clear').addEventListener('click', () => api.recentClear());
+
+// ───────────────────────── 최근 문서 내용 검색 ─────────────────────────
+const queryInput = $('#recent-query');
+const resultsBox = $('#search-results');
+let searchTimer = null;
+let searchSeq = 0;
+let lastResults = [];
+
+function snippetHtml(text, start, length) {
+  const from = Math.max(0, start - 28);
+  const to = Math.min(text.length, start + length + 70);
+  return (
+    (from > 0 ? '…' : '') +
+    escapeHtml(text.slice(from, start).trimStart()) +
+    `<mark>${escapeHtml(text.slice(start, start + length))}</mark>` +
+    escapeHtml(text.slice(start + length, to)) +
+    (to < text.length ? '…' : '')
+  );
+}
+
+function setSearchMode(on) {
+  resultsBox.hidden = !on;
+  el.recentList.hidden = on;
+  $('#recent-clear').hidden = on || !el.recentList.querySelector('.recent-item');
+}
+
+async function runSearch() {
+  const query = queryInput.value.trim();
+  const seq = ++searchSeq;
+  if (!query) {
+    setSearchMode(false);
+    lastResults = [];
+    return;
+  }
+  const results = await api.recentSearch(query);
+  if (seq !== searchSeq) return; // 그 사이 검색어가 바뀜
+  lastResults = results;
+  setSearchMode(true);
+  if (!results.length) {
+    resultsBox.innerHTML = `<div class="sb-empty">"${escapeHtml(query)}"이(가) 들어간 문서가 없습니다.<br/>최근 문서 목록에 있는 파일만 검색합니다.</div>`;
+    return;
+  }
+  const total = results.reduce((n, r) => n + r.total, 0);
+  resultsBox.innerHTML =
+    `<div class="sr-summary">문서 ${results.length}개 · ${total}곳</div>` +
+    results
+      .map(
+        (r, i) => `<div class="sr-file" data-i="${i}">
+          <div class="sr-head" data-i="${i}" title="${escapeHtml(r.path)}"><svg><use href="#i-file"/></svg><span class="sr-name">${escapeHtml(r.name)}</span>${r.total ? `<span class="sr-count">${r.total}</span>` : ''}</div>
+          ${r.matches
+            .map((m, j) => `<div class="sr-line" data-i="${i}" data-j="${j}"><span class="sr-no">${m.line + 1}</span><span class="sr-text">${snippetHtml(m.text, m.start, m.length)}</span></div>`)
+            .join('')}
+          ${r.total > r.matches.length ? `<div class="sr-more">… ${r.total - r.matches.length}곳 더</div>` : ''}
+        </div>`,
+      )
+      .join('');
+}
+
+function openResult(i, j = 0) {
+  const r = lastResults[i];
+  if (!r) return;
+  const m = r.matches[j];
+  api.recentOpen(r.path, m ? { line: m.line, query: queryInput.value.trim() } : null);
+}
+
+queryInput.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(runSearch, 180);
+});
+queryInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') openResult(0);
+  else if (e.key === 'Escape') {
+    queryInput.value = '';
+    runSearch();
+  }
+});
+resultsBox.addEventListener('click', (e) => {
+  const row = e.target.closest('.sr-line, .sr-head');
+  if (row) openResult(Number(row.dataset.i), Number(row.dataset.j ?? 0));
+});
+// 검색 중에 최근 문서 목록이 바뀌면(파일을 열거나 저장) 결과도 다시
+api.onRecentChanged(() => queryInput.value.trim() && runSearch());
+
+function focusRecentSearch() {
+  if (!prefs.sidebar) api.setSettings({ sidebar: true });
+  document.querySelector('.sb-tab[data-tab="recent"]').click();
+  queryInput.focus();
+  queryInput.select();
+}
+
+// 검색 결과로 문서를 열면 main이 보내 준다: 해당 줄의 검색어를 선택
+api.onTabReveal(({ tabId, line, query }) => {
+  setTimeout(() => {
+    if (doc?.id !== tabId) activateTab(tabId);
+    revealMatch(view, line, query);
+    if (prefs.viewMode === 'preview') {
+      const target = [...lineMap].reverse().find((x) => x.line <= line);
+      if (target) el.previewPane.scrollTo({ top: target.el.offsetTop - 40, behavior: 'smooth' });
+    }
+  }, 60);
+});
 api.onRecentChanged(loadRecent);
 
 document.querySelectorAll('.sb-tab').forEach((tab) =>
@@ -832,6 +934,7 @@ const commands = {
   newTab: () => newTab(),
   closeTab: () => closeTab(),
   nextTab: () => cycleTab(1),
+  searchRecent: () => focusRecentSearch(),
   detachTab: async () => {
     if (!(await api.tabDetach(doc.id))) toast('탭이 하나뿐이라 새 창으로 옮길 수 없습니다');
   },
