@@ -17,6 +17,12 @@ contextBridge.exposeInMainWorld('api', {
   tabActivated: (tabId) => ipcRenderer.send('tab:activated', tabId),
   tabClosed: (tabId) => ipcRenderer.send('tab:closed', tabId),
   confirmCloseTab: (name) => ipcRenderer.invoke('tab:confirm-close', name),
+  tabDragStart: (tabId) => ipcRenderer.send('tab:drag-start', tabId),
+  tabDragEnd: (tabId) => ipcRenderer.send('tab:drag-end', tabId),
+  tabDragActive: () => ipcRenderer.invoke('tab:drag-active'),
+  tabDropHere: (index) => ipcRenderer.send('tab:drop-here', index),
+  tabDetach: (tabId) => ipcRenderer.invoke('tab:detach', tabId),
+  onTabImport: (cb) => on('tab:import', cb),
   closeWindow: () => ipcRenderer.send('window:close'),
 
   // 문서 (모두 탭 단위)

@@ -191,6 +191,7 @@ body.dirty #dirty-dot { display: block; }
   background: var(--accent);
 }
 .tab.dragging { opacity: 0.45; }
+body.tab-drop-target #tabbar { background: color-mix(in srgb, var(--accent) 12%, var(--surface)); box-shadow: inset 0 -2px 0 var(--accent); }
 .tab-icon { width: 14px; height: 14px; flex-shrink: 0; opacity: 0.6; }
 .tab-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-close {
