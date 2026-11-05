@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' file: data: blob: https: http:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'self'" />
+  <title>MD Editor</title>
+  <link rel="stylesheet" href="vendor/katex/katex.min.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body data-view="split" data-sidebar="on">
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-sidebar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></symbol>
+      <symbol id="i-code" viewBox="0 0 24 24"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></symbol>
+      <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></symbol>
+      <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></symbol>
+      <symbol id="i-ul" viewBox="0 0 24 24"><path d="M9 6h12M9 12h12M9 18h12M4 6h.01M4 12h.01M4 18h.01"/></symbol>
+      <symbol id="i-ol" viewBox="0 0 24 24"><path d="M10 6h11M10 12h11M10 18h11M4 6h1v4M4 10h2M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></symbol>
+      <symbol id="i-task" viewBox="0 0 24 24"><rect x="3" y="4" width="6" height="6" rx="1"/><path d="m3 17 2 2 4-4M13 7h8M13 17h8"/></symbol>
+      <symbol id="i-quote" viewBox="0 0 24 24"><path d="M4 6v12M9 8h11M9 12h11M9 16h7"/></symbol>
+      <symbol id="i-codeblock" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m10 10-2 2 2 2M14 10l2 2-2 2"/></symbol>
+      <symbol id="i-table" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18M9 4v16"/></symbol>
+      <symbol id="i-hr" viewBox="0 0 24 24"><path d="M3 12h18M7 7h10M7 17h10" opacity=".4"/><path d="M3 12h18"/></symbol>
+      <symbol id="i-pdf" viewBox="0 0 24 24"><path d="M14 3v5h5"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/><path d="M12 11v6m-3-3 3 3 3-3"/></symbol>
+      <symbol id="i-save" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></symbol>
+            <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    </defs>
+  </svg>
+
+  <header id="toolbar">
+    <div class="tb-group">
+      <button class="tb-btn" data-action="toggleSidebar" title="사이드바 (⌘\)"><svg><use href="#i-sidebar"/></svg></button>
+    </div>
+    <div class="tb-group tb-format">
+      <button class="tb-btn tb-text" data-format="h1" title="제목 1 (⌥⌘1)">H1</button>
+      <button class="tb-btn tb-text" data-format="h2" title="제목 2 (⌥⌘2)">H2</button>
+      <button class="tb-btn tb-text" data-format="h3" title="제목 3 (⌥⌘3)">H3</button>
+      <span class="tb-sep"></span>
+      <button class="tb-btn tb-text" data-format="bold" title="굵게 (⌘B)"><b>B</b></button>
+      <button class="tb-btn tb-text" data-format="italic" title="기울임 (⌘I)"><i style="font-family:Georgia,serif">I</i></button>
+      <button class="tb-btn tb-text" data-format="strike" title="취소선 (⇧⌘X)"><s>S</s></button>
+      <button class="tb-btn" data-format="code" title="인라인 코드 (⌘E)"><svg><use href="#i-code"/></svg></button>
+      <span class="tb-sep"></span>
+      <button class="tb-btn" data-format="link" title="링크 (⌘K)"><svg><use href="#i-link"/></svg></button>
+      <button class="tb-btn" data-format="image" title="이미지 — 붙여넣기/끌어놓기도 가능"><svg><use href="#i-image"/></svg></button>
+      <span class="tb-sep"></span>
+      <button class="tb-btn" data-format="ul" title="글머리 목록 (⇧⌘8)"><svg><use href="#i-ul"/></svg></button>
+      <button class="tb-btn" data-format="ol" title="번호 목록 (⇧⌘7)"><svg><use href="#i-ol"/></svg></button>
+      <button class="tb-btn" data-format="task" title="체크리스트 (⇧⌘9)"><svg><use href="#i-task"/></svg></button>
+      <button class="tb-btn" data-format="quote" title="인용 (⇧⌘.)"><svg><use href="#i-quote"/></svg></button>
+      <span class="tb-sep tb-more"></span>
+      <button class="tb-btn tb-more" data-format="codeblock" title="코드 블록 (⌥⌘C)"><svg><use href="#i-codeblock"/></svg></button>
+      <button class="tb-btn tb-more" data-format="table" title="표 (⌥⌘T)"><svg><use href="#i-table"/></svg></button>
+      <button class="tb-btn tb-more" data-format="hr" title="구분선"><svg><use href="#i-hr"/></svg></button>
+    </div>
+    <div class="tb-title" id="doc-title"><span id="title-text">제목 없음</span><span id="dirty-dot" title="저장되지 않음"></span></div>
+    <div class="tb-group">
+      <div class="segmented" role="tablist" aria-label="보기 모드">
+        <button data-view-mode="edit" title="편집기만 (⌘1)">편집</button>
+        <button data-view-mode="split" title="분할 보기 (⌘2)">분할</button>
+        <button data-view-mode="preview" title="미리보기만 (⌘3)">미리보기</button>
+      </div>
+      <button class="tb-btn" data-action="save" title="저장 (⌘S)"><svg><use href="#i-save"/></svg></button>
+      <button class="tb-btn" data-action="exportPdf" title="PDF로 내보내기 (⌘P)"><svg><use href="#i-pdf"/></svg></button>
+    </div>
+  </header>
+
+  <main id="workspace">
+    <aside id="sidebar">
+      <div class="sb-tabs" role="tablist">
+        <button class="sb-tab active" data-tab="toc">목차</button>
+        <button class="sb-tab" data-tab="recent">최근 문서</button>
+      </div>
+      <nav id="toc" class="sb-panel active" data-panel="toc"></nav>
+      <div id="recent" class="sb-panel" data-panel="recent">
+        <ul id="recent-list" class="recent-list"></ul>
+        <button id="recent-clear" class="recent-clear" type="button">목록 지우기</button>
+      </div>
+    </aside>
+    <section id="editor-pane"></section>
+    <div id="divider" title="드래그하여 크기 조절"></div>
+    <section id="preview-pane"><article id="preview" class="markdown-body"></article></section>
+  </main>
+
+  <footer id="statusbar">
+    <span id="st-path" class="st-path" title="Finder에서 보기 (⇧⌘R)"></span>
+    <span class="st-spacer"></span>
+    <span id="st-save"></span>
+    <span id="st-cursor"></span>
+    <span id="st-count"></span>
+    <span id="st-read"></span>
+  </footer>
+
+  <div id="drop-overlay"><div>마크다운 파일을 놓아서 열기</div></div>
+  <div id="toasts"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
