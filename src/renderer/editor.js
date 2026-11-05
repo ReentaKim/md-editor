@@ -52,7 +52,7 @@ const baseTheme = EditorView.theme({
   '.cm-panel.cm-search input, .cm-panel.cm-search button': { fontFamily: 'var(--font-ui)' },
 });
 
-export function createEditor(parent, { onChange, onScroll, onCursor, onPasteFiles }) {
+export function createEditor(parent, { onChange, onScroll, onCursor, onPasteFiles, placeholderText = '여기에 마크다운을 입력하세요…' }) {
   const extensions = [
         history(),
         drawSelection(),
@@ -68,7 +68,7 @@ export function createEditor(parent, { onChange, onScroll, onCursor, onPasteFile
         EditorView.lineWrapping,
         markdown({ base: markdownLanguage, codeLanguages: languages, addKeymap: true }),
         syntaxHighlighting(mdHighlight),
-        placeholder('여기에 마크다운을 입력하세요…  (⌘O 파일 열기 · 파일을 끌어다 놓아도 됩니다)'),
+        placeholder(placeholderText),
         keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, indentWithTab]),
         baseTheme,
         EditorView.updateListener.of((u) => {
