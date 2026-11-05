@@ -20,9 +20,9 @@
   --ed-mark: #a0a4ab;
   --syn-keyword: #cf222e; --syn-string: #0a3069; --syn-number: #0550ae; --syn-comment: #6e7781;
   --syn-func: #8250df; --syn-type: #953800; --syn-attr: #116329;
-  --font-ui: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Segoe UI", sans-serif;
-  --font-editor: "SF Mono", ui-monospace, "D2Coding", "Apple SD Gothic Neo", Menlo, monospace;
-  --font-mono: "SF Mono", ui-monospace, "D2Coding", Menlo, monospace;
+  --font-ui: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Segoe UI", "Malgun Gothic", sans-serif;
+  --font-editor: "SF Mono", ui-monospace, "D2Coding", "Cascadia Mono", Consolas, "Apple SD Gothic Neo", "Malgun Gothic", Menlo, monospace;
+  --font-mono: "SF Mono", ui-monospace, "D2Coding", "Cascadia Mono", Consolas, Menlo, monospace;
   --editor-font-size: 14.5px;
   --toolbar-h: 46px;
   --status-h: 26px;

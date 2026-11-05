@@ -6,6 +6,7 @@
 //   2. DMG 다운로드 → SHA-256 검증(릴리스 asset digest)
 //   3. DMG를 읽기 전용으로 마운트 → 앱 복사(staging) → 번들 ID·버전·코드 서명 검증
 //   4. 앱이 종료된 뒤 작은 셸 스크립트가 기존 앱과 교체하고 다시 실행
+//      (Windows: 설치 프로그램(.exe)을 받아 SHA-256 검증 → 종료 후 PowerShell이 /S로 조용히 재설치)
 //   5. 실패하면 이전 앱을 되돌리고, 다음 실행 때 원인과 수동 설치 방법을 안내
 const { app, net, shell, dialog, BrowserWindow } = require('electron');
 const fs = require('node:fs');
@@ -69,8 +70,16 @@ function compareVersions(a, b) {
 function appBundlePath() {
   return path.resolve(path.dirname(app.getPath('exe')), '..', '..');
 }
+const IS_WIN = process.platform === 'win32';
+/** 이 플랫폼용 릴리스 파일 이름 규칙: Mac `MD-Editor-<ver>-arm64.dmg`, Windows `MD-Editor-Setup-<ver>-x64.exe` */
+const ASSET_SUFFIX = `-${process.arch}.${IS_WIN ? 'exe' : 'dmg'}`;
+
 function canSelfInstall() {
-  return app.isPackaged && appBundlePath().endsWith('.app') && process.platform === 'darwin';
+  if (!app.isPackaged) return false;
+  if (process.platform === 'darwin') return appBundlePath().endsWith('.app');
+  // 설치 프로그램으로 설치된 경우에만(제거 프로그램이 함께 있음) 자체 업데이트
+  if (IS_WIN) return fs.existsSync(path.join(path.dirname(app.getPath('exe')), 'Uninstall MD Editor.exe'));
+  return false;
 }
 
 // ───────────────────────── 확인 ─────────────────────────
@@ -99,7 +108,19 @@ async function check({ manual = false } = {}) {
       }
       return;
     }
-    const asset = (rel.assets || []).find((a) => a.name.endsWith(`-${process.arch}.dmg`));
+    const asset = (rel.assets || []).find((a) => a.name.endsWith(ASSET_SUFFIX));
+    if (!asset) {
+      // 새 버전은 나왔지만 이 플랫폼용 파일이 아직 올라오지 않음(예: Windows 빌드 진행 중)
+      setState({ status: 'idle' });
+      if (manual) {
+        await dialog.showMessageBox({
+          type: 'info',
+          message: `새 버전 v${version}이 준비 중입니다.`,
+          detail: '이 컴퓨터용 설치 파일이 아직 올라오지 않았습니다. 잠시 후 다시 확인해 주세요.',
+        });
+      }
+      return;
+    }
     const sha256 = asset?.digest?.startsWith('sha256:')
       ? asset.digest.slice(7)
       : (rel.body || '').match(/`([0-9a-f]{64})`/i)?.[1];
@@ -154,6 +175,18 @@ async function download() {
 
     setState({ status: 'verifying', version });
     if (hash.digest('hex') !== sha256) throw new Error('받은 파일의 SHA-256이 릴리스와 일치하지 않습니다. 파일이 손상되었을 수 있습니다.');
+
+    if (IS_WIN) {
+      // Windows: 설치 프로그램 자체를 실행할 것이므로 실행 파일 형식(MZ)만 추가로 확인
+      const fh = await fsp.open(dmg, 'r');
+      const head = Buffer.alloc(2);
+      await fh.read(head, 0, 2, 0);
+      await fh.close();
+      if (head.toString('latin1') !== 'MZ') throw new Error('받은 파일이 Windows 설치 프로그램이 아닙니다.');
+      staged = { installer: dmg, dir, version };
+      setState({ status: 'ready', version });
+      return;
+    }
 
     // 읽기 전용 마운트 → 앱 복사 → 검증
     const mnt = path.join(dir, 'mnt');
@@ -227,8 +260,37 @@ write true ""
 exit 0
 `;
 
+const WIN_INSTALL_SCRIPT = `param([int]$AppPid, [string]$Installer, [string]$Result, [string]$Relaunch, [string]$Version, [string]$Dir, [string]$Exe)
+# MD Editor 업데이트 설치 (Windows) — 앱이 완전히 종료된 뒤 실행된다
+for ($i = 0; $i -lt 150 -and (Get-Process -Id $AppPid -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 200 }
+$code = -1
+try {
+  $p = Start-Process -FilePath $Installer -ArgumentList '/S', '--updated' -Wait -PassThru
+  $code = $p.ExitCode
+} catch { $code = -2 }
+$ok = ($code -eq 0)
+$reason = if ($ok) { '' } else { "installer-exit-$code" }
+$json = @{ ok = $ok; version = $Version; reason = $reason; dir = $Dir; file = $Installer } | ConvertTo-Json -Compress
+[IO.File]::WriteAllText($Result, $json, (New-Object System.Text.UTF8Encoding $false))
+if ($Relaunch -eq '1' -and -not $env:MD_EDITOR_UPDATE_NO_RELAUNCH) { Start-Process -FilePath $Exe }
+`;
+
 function runInstallerOnQuit() {
   if (!installOnQuit || !staged) return;
+  if (IS_WIN) {
+    const script = path.join(staged.dir, 'install.ps1');
+    fs.writeFileSync(script, '\ufeff' + WIN_INSTALL_SCRIPT, 'utf8'); // BOM: PowerShell 5.1이 UTF-8로 읽도록
+    const child = spawn(
+      'powershell.exe',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', script,
+        '-AppPid', String(process.pid), '-Installer', staged.installer, '-Result', resultFile(),
+        '-Relaunch', relaunchAfterInstall ? '1' : '0', '-Version', staged.version, '-Dir', staged.dir, '-Exe', process.execPath],
+      { detached: true, stdio: 'ignore', windowsHide: true },
+    );
+    child.unref();
+    installOnQuit = false;
+    return;
+  }
   const script = path.join(staged.dir, 'install.sh');
   fs.writeFileSync(script, INSTALL_SCRIPT, { mode: 0o755 });
   const child = spawn(
@@ -254,6 +316,20 @@ async function reportPreviousResult() {
     if (result.version === app.getVersion()) installedNotice = result.version;
     return;
   }
+  const file = result.file || result.dmg;
+  if (IS_WIN) {
+    const { response } = await dialog.showMessageBox({
+      type: 'warning',
+      buttons: ['설치 프로그램 직접 실행', '닫기'],
+      defaultId: 0,
+      cancelId: 1,
+      message: `v${result.version} 업데이트를 설치하지 못했습니다.`,
+      detail: `설치 프로그램이 정상적으로 끝나지 않았습니다(${result.reason}). 기존 앱은 그대로 유지되어 있습니다.\n\n"설치 프로그램 직접 실행"을 눌러 다시 설치해 주세요.`,
+    });
+    if (response === 0 && file && fs.existsSync(file)) shell.openPath(file);
+    else if (response === 0) openReleasePage();
+    return;
+  }
   // 실패: 대부분 macOS "앱 관리" 권한 때문. DMG는 남겨 두었으므로 직접 설치를 안내한다
   const { response } = await dialog.showMessageBox({
     type: 'warning',
@@ -266,7 +342,7 @@ async function reportPreviousResult() {
       '• 시스템 설정 → 개인정보 보호 및 보안 → 앱 관리에서 MD Editor를 허용한 뒤 다시 업데이트하거나\n' +
       '• "DMG로 직접 설치"를 눌러 응용 프로그램 폴더로 끌어다 놓으세요.',
   });
-  if (response === 0 && result.dmg && fs.existsSync(result.dmg)) shell.openPath(result.dmg);
+  if (response === 0 && file && fs.existsSync(file)) shell.openPath(file);
   else if (response === 0) openReleasePage();
   else if (response === 1) shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_AppBundles');
 }

@@ -19,8 +19,8 @@
   --hl-func: #8250df;
   --hl-type: #953800;
   --hl-attr: #116329;
-  --md-font: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Noto Sans KR", "Segoe UI", sans-serif;
-  --md-mono: "SF Mono", ui-monospace, "D2Coding", Menlo, Consolas, monospace;
+  --md-font: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Noto Sans KR", "Segoe UI", "Malgun Gothic", sans-serif;
+  --md-mono: "SF Mono", ui-monospace, "D2Coding", "Cascadia Mono", Menlo, Consolas, monospace;
 }
 @media (prefers-color-scheme: dark) {
   :root {

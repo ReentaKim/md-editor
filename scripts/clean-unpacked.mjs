@@ -16,6 +16,6 @@ for (const entry of await readdir(outDir, { withFileTypes: true })) {
       try { execFileSync(LSREGISTER, ['-u', path.join(dir, app)]); } catch { /* 등록 안 된 경우 무시 */ }
     }
   }
-  if (entry.name.startsWith('mac') || entry.name === '.icon-icns') await rm(dir, { recursive: true, force: true });
+  if (entry.name.startsWith('mac') || entry.name === 'win-unpacked' || entry.name.startsWith('.icon-')) await rm(dir, { recursive: true, force: true });
 }
-console.log(`정리 완료: ${outDir} 에는 DMG만 남았습니다`);
+console.log(`정리 완료: ${outDir} 에는 설치 파일만 남았습니다`);

@@ -10,7 +10,23 @@ const $ = (sel) => document.querySelector(sel);
 const styleEl = document.createElement('style');
 styleEl.textContent = previewCss;
 document.head.prepend(styleEl);
-if (api.platform !== 'darwin') document.body.classList.add('not-mac');
+const isMac = api.platform === 'darwin';
+if (!isMac) document.body.classList.add('not-mac');
+
+/** 맥 단축키 기호(⌘⌥⇧⌃)를 Windows 표기(Ctrl+Alt+Shift+…)로 */
+function shortcut(text) {
+  if (isMac) return text;
+  return text.replace(/([⌃⌥⇧⌘]+)(\S)/g, (_, mods, key) => {
+    const parts = [];
+    if (mods.includes('⌘') || mods.includes('⌃')) parts.push('Ctrl');
+    if (mods.includes('⌥')) parts.push('Alt');
+    if (mods.includes('⇧')) parts.push('Shift');
+    return [...parts, key.toUpperCase()].join('+');
+  });
+}
+if (!isMac) {
+  for (const node of document.querySelectorAll('[title]')) node.title = shortcut(node.title).replace('Finder', '탐색기');
+}
 
 const el = {
   editorPane: $('#editor-pane'),
@@ -58,6 +74,7 @@ const view = createEditor(el.editorPane, {
     el.stCursor.textContent = `줄 ${line.number}, 열 ${pos - line.from + 1}`;
   },
   onPasteFiles: (files, pos) => insertImages(files, pos),
+  placeholderText: shortcut('여기에 마크다운을 입력하세요…  (⌘O 파일 열기 · 파일을 끌어다 놓아도 됩니다)'),
 });
 
 function getContent() {
@@ -742,7 +759,7 @@ const commands = {
     editorCommands.find(view);
   },
   format: (kind) => {
-    if (prefs.viewMode === 'preview') return toast('미리보기 모드에서는 편집할 수 없습니다 (⌘1 / ⌘2)');
+    if (prefs.viewMode === 'preview') return toast(shortcut('미리보기 모드에서는 편집할 수 없습니다 (⌘1 / ⌘2)'));
     applyFormat(view, kind);
   },
 };

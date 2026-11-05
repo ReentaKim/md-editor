@@ -5,7 +5,7 @@
 <h1 align="center">MD Editor</h1>
 
 <p align="center">
-  Mac에서 쓰는 깔끔한 마크다운 편집기<br>
+  Mac과 Windows에서 쓰는 깔끔한 마크다운 편집기<br>
   <b>실시간 미리보기 · 탭 · 다이어그램과 수식 · PDF/HTML 내보내기 · 버튼 한 번 업데이트</b>
 </p>
 
@@ -71,32 +71,50 @@
 
 ## 📦 설치
 
-> **지원 환경:** macOS · Apple Silicon(M1 이상) Mac. Intel Mac과 Windows는 아직 지원하지 않습니다.
+| | Mac | Windows |
+| --- | --- | --- |
+| 지원 환경 | macOS · Apple Silicon(M1 이상) | Windows 10/11 · 64비트 |
+| 설치 파일 | `MD-Editor-<버전>-arm64.dmg` | `MD-Editor-Setup-<버전>-x64.exe` |
+| 한 줄 설치 | 터미널 | PowerShell |
 
-### 방법 1. 터미널에 한 줄 붙여 넣기 (추천)
+### 🍎 Mac
 
-**터미널** 앱(Spotlight에서 "터미널" 검색)을 열고 아래 한 줄을 붙여 넣은 뒤 Enter를 누르세요.
+**방법 1. 터미널에 한 줄 붙여 넣기 (추천)**: **터미널** 앱(Spotlight에서 "터미널" 검색)을 열고 아래 한 줄을 붙여 넣은 뒤 Enter를 누르세요.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ReentaKim/md-editor/main/install.sh | sh
 ```
 
-최신 버전을 내려받아 파일이 손상되지 않았는지(SHA-256) 확인한 뒤 **응용 프로그램** 폴더에 설치하고 실행합니다. 이 방법으로 설치하면 보안 경고가 뜨지 않습니다. 스크립트 내용은 [install.sh](install.sh)에서 볼 수 있습니다.
+최신 버전을 내려받아 SHA-256으로 확인한 뒤 **응용 프로그램** 폴더에 설치하고 실행합니다. 이 방법으로 설치하면 보안 경고가 뜨지 않습니다. ([install.sh](install.sh))
 
-### 방법 2. DMG 내려받아 설치
+**방법 2. DMG 내려받아 설치**
 
 1. [최신 릴리스](https://github.com/ReentaKim/md-editor/releases/latest)에서 `MD-Editor-<버전>-arm64.dmg`를 내려받습니다.
 2. DMG를 열고 **MD Editor**를 **Applications** 폴더로 끌어다 놓습니다.
-3. 처음 실행하면 *"Apple에서 확인할 수 없습니다"* 경고가 뜹니다. Apple 공증을 받지 않은 앱이기 때문입니다.
-   - **완료**를 누르고 **시스템 설정 → 개인정보 보호 및 보안**으로 이동합니다. 아래쪽에 있는 **그래도 열기**를 누르세요. 처음 한 번만 하면 됩니다.
-   - 터미널에서 `xattr -dr com.apple.quarantine "/Applications/MD Editor.app"`을 실행해도 됩니다.
+3. 처음 실행하면 *"Apple에서 확인할 수 없습니다"* 경고가 뜹니다. Apple 공증을 받지 않은 앱이기 때문입니다. **완료**를 누르고 **시스템 설정 → 개인정보 보호 및 보안**에서 **그래도 열기**를 누르세요. 처음 한 번만 하면 됩니다.
 
-### 방법 3. Claude Code에게 부탁하기
+### 🪟 Windows
 
-Claude Code를 쓰고 있다면 이렇게 요청하면 됩니다.
+**방법 1. PowerShell에 한 줄 붙여 넣기 (추천)**: 시작 메뉴에서 **PowerShell**을 열고 아래 한 줄을 붙여 넣은 뒤 Enter를 누르세요.
+
+```powershell
+irm https://raw.githubusercontent.com/ReentaKim/md-editor/main/install.ps1 | iex
+```
+
+최신 버전을 내려받아 SHA-256으로 확인한 뒤 설치하고 실행합니다. 관리자 권한은 필요 없고, 시작 메뉴와 바탕화면에 바로가기가 만들어집니다. ([install.ps1](install.ps1))
+
+**방법 2. 설치 파일 내려받아 실행**
+
+1. [최신 릴리스](https://github.com/ReentaKim/md-editor/releases/latest)에서 `MD-Editor-Setup-<버전>-x64.exe`를 내려받아 실행합니다.
+2. *"Windows의 PC 보호"* 파란 창이 뜨면 **추가 정보 → 실행**을 누르세요. 코드 서명 인증서가 없는 앱이라 처음 한 번 뜹니다.
+3. 별도 질문 없이 바로 설치되고 앱이 실행됩니다. 설치 위치는 `%LOCALAPPDATA%\Programs`입니다.
+
+### 🤖 Claude Code에게 부탁하기
+
+Claude Code를 쓰고 있다면 Mac이든 Windows든 이렇게 요청하면 됩니다.
 
 ```
-https://github.com/ReentaKim/md-editor 의 install.sh로 MD Editor 설치해줘
+https://github.com/ReentaKim/md-editor 의 설치 스크립트로 MD Editor 설치해줘
 ```
 
 ---
@@ -138,13 +156,14 @@ https://github.com/ReentaKim/md-editor 의 install.sh로 MD Editor 설치해줘
 
 ### `.md` 파일을 항상 MD Editor로 열기
 
-1. Finder에서 아무 `.md` 파일을 선택하고 `⌘I`(정보 가져오기)를 누릅니다.
-2. **다음으로 열기**에서 MD Editor를 고릅니다.
-3. **모두 변경**을 누릅니다.
+- **Mac**: Finder에서 아무 `.md` 파일을 선택하고 `⌘I`(정보 가져오기)를 누릅니다. **다음으로 열기**에서 MD Editor를 고른 뒤 **모두 변경**을 누르세요.
+- **Windows**: 설치하면 `.md` 파일이 MD Editor에 연결됩니다. 다른 앱으로 열린다면 `.md` 파일을 오른쪽 클릭하고 **연결 프로그램 → 다른 앱 선택 → MD Editor**를 고른 뒤 **항상**을 누르세요.
 
 ---
 
 ## ⌨️ 단축키
+
+> Windows에서는 `⌘` → `Ctrl`, `⌥` → `Alt`, `⇧` → `Shift`로 바꿔 누르세요. 앱 안의 버튼 설명에는 Windows 표기로 나옵니다.
 
 | 분류 | 기능 | 단축키 |
 | --- | --- | --- |
@@ -167,13 +186,15 @@ https://github.com/ReentaKim/md-editor 의 install.sh로 MD Editor 설치해줘
 
 새 버전이 나오면 앱 오른쪽 아래에 알림이 뜹니다. **[업데이트] → [지금 재시작]**을 누르면 됩니다. 메뉴의 **MD Editor → 업데이트 확인…**으로 직접 확인할 수도 있습니다.
 
-- 처음 업데이트할 때 macOS가 "앱 관리" 권한을 물을 수 있습니다. **시스템 설정 → 개인정보 보호 및 보안 → 앱 관리**에서 MD Editor를 허용해 주세요.
-- 알림을 끄려면 **MD Editor → 자동으로 업데이트 확인**의 체크를 해제하세요.
+- **Mac**: 처음 업데이트할 때 macOS가 "앱 관리" 권한을 물을 수 있습니다. **시스템 설정 → 개인정보 보호 및 보안 → 앱 관리**에서 MD Editor를 허용해 주세요.
+- **Windows**: 새 설치 파일을 받아 조용히 다시 설치한 뒤 앱을 다시 실행합니다. 관리자 권한은 묻지 않습니다. 업데이트 확인 메뉴는 **도움말 → 업데이트 확인…**에 있습니다.
+- 알림을 끄려면 **자동으로 업데이트 확인**의 체크를 해제하세요(Mac: MD Editor 메뉴, Windows: 도움말 메뉴).
 - v0.2.x 이하 버전에는 앱 안 업데이트 기능이 없습니다. 위의 설치 방법으로 한 번만 다시 설치해 주세요.
 
 ## 🗑️ 삭제
 
-**응용 프로그램** 폴더의 MD Editor를 휴지통으로 옮기면 됩니다. 설정(최근 문서 등)까지 지우려면 `~/Library/Application Support/MD Editor` 폴더도 함께 삭제하세요.
+- **Mac**: **응용 프로그램** 폴더의 MD Editor를 휴지통으로 옮기면 됩니다. 설정(최근 문서 등)까지 지우려면 `~/Library/Application Support/MD Editor` 폴더도 함께 삭제하세요.
+- **Windows**: **설정 → 앱 → 설치된 앱**에서 MD Editor의 **⋯ → 제거**를 누릅니다. 설정까지 지우려면 `%APPDATA%\MD Editor` 폴더도 함께 삭제하세요.
 
 ---
 
@@ -182,7 +203,8 @@ https://github.com/ReentaKim/md-editor 의 install.sh로 MD Editor 설치해줘
 ```bash
 npm install
 npm start        # 빌드 후 실행
-npm run dist     # release/<버전>/ 에 .dmg 생성 (Apple Silicon)
+npm run dist     # release/<버전>/ 에 Mac용 .dmg 생성 (Apple Silicon)
+npm run dist:win # release/<버전>/ 에 Windows용 설치 파일 생성 (Mac에서도 빌드 가능)
 ```
 
 Electron + CodeMirror 6 + markdown-it(+ KaTeX, highlight.js, Mermaid, DOMPurify)로 만들었습니다. 모든 라이브러리는 앱 안에 함께 들어 있어서 인터넷 없이 동작합니다. 렌더러는 `sandbox` + CSP 환경에서 실행되고, 폴더를 탐색하는 API는 없습니다.
@@ -196,9 +218,9 @@ Electron + CodeMirror 6 + markdown-it(+ KaTeX, highlight.js, Mermaid, DOMPurify)
 | `src/renderer/editor.js` | CodeMirror 6 편집기와 서식 명령 |
 | `src/renderer/markdown.js` | 마크다운 렌더링(한국어 강조 보완 포함)과 Mermaid |
 | `src/renderer/preview.css` | 문서 스타일 (HTML 내보내기에도 그대로 들어감) |
-| `install.sh` | 사용자용 설치 스크립트 |
+| `install.sh` / `install.ps1` | 사용자용 설치 스크립트 (Mac / Windows) |
 
-**릴리스 규칙:** 태그는 `v<버전>`, DMG 파일 이름은 `MD-Editor-<버전>-arm64.dmg`로 GitHub Release에 올립니다. 앱의 업데이트 기능과 `install.sh`가 이 이름으로 파일을 찾습니다. 변경 이력은 [CHANGELOG.md](CHANGELOG.md)에 있습니다.
+**릴리스 규칙:** 태그는 `v<버전>`으로 붙이고, 같은 릴리스에 Mac용 `MD-Editor-<버전>-arm64.dmg`와 Windows용 `MD-Editor-Setup-<버전>-x64.exe`를 함께 올립니다. 두 파일 모두 Mac에서 빌드할 수 있습니다. 앱의 업데이트 기능과 설치 스크립트가 이 이름으로 파일을 찾습니다. 변경 이력은 [CHANGELOG.md](CHANGELOG.md)에 있습니다.
 
 ## 라이선스
 

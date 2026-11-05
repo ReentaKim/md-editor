@@ -9,6 +9,19 @@ const updater = require('./updater');
 
 const MD_EXTENSIONS = ['md', 'markdown', 'mdown', 'mkd', 'mdx', 'txt'];
 const isMac = process.platform === 'darwin';
+const isWin = process.platform === 'win32';
+
+/** 맥 단축키 기호(⌘⌥⇧⌃)를 Windows 표기(Ctrl+Alt+Shift+…)로 바꾼다 */
+function toPlatformShortcuts(text) {
+  if (isMac) return text;
+  return text.replace(/([⌃⌥⇧⌘]+)(\S)/g, (_, mods, key) => {
+    const parts = [];
+    if (mods.includes('⌘') || mods.includes('⌃')) parts.push('Ctrl');
+    if (mods.includes('⌥')) parts.push('Alt');
+    if (mods.includes('⇧')) parts.push('Shift');
+    return [...parts, key.toUpperCase()].join('+');
+  });
+}
 // 개발/테스트용: 설치된 앱과 설정·단일 인스턴스 잠금을 분리
 if (process.env.MD_EDITOR_USER_DATA) app.setPath('userData', process.env.MD_EDITOR_USER_DATA);
 
@@ -589,7 +602,7 @@ function buildMenu() {
         { label: 'PDF로 내보내기…', accelerator: 'CmdOrCtrl+P', click: () => send('exportPdf') },
         { label: 'HTML로 내보내기…', accelerator: 'CmdOrCtrl+Shift+E', click: () => send('exportHtml') },
         { type: 'separator' },
-        { label: 'Finder에서 보기', accelerator: 'CmdOrCtrl+Shift+R', click: () => send('reveal') },
+        { label: isMac ? 'Finder에서 보기' : '탐색기에서 보기', accelerator: 'CmdOrCtrl+Shift+R', click: () => send('reveal') },
         { type: 'separator' },
         { label: '탭 닫기', accelerator: 'CmdOrCtrl+W', click: () => send('closeTab') },
         { label: '창 닫기', accelerator: 'CmdOrCtrl+Shift+W', click: () => BrowserWindow.getFocusedWindow()?.close() },
@@ -679,7 +692,34 @@ function buildMenu() {
       role: 'help',
       label: '도움말',
       submenu: [
-        { label: '마크다운 문법 예제 열기', click: () => openContent(targetWindow(), fs.readFileSync(path.join(__dirname, '..', '..', 'dist', 'sample.md'), 'utf8'), '마크다운 문법 예제') },
+        {
+          label: '마크다운 문법 예제 열기',
+          click: () => openContent(targetWindow(), toPlatformShortcuts(fs.readFileSync(path.join(__dirname, '..', '..', 'dist', 'sample.md'), 'utf8')), '마크다운 문법 예제'),
+        },
+        // Windows에는 앱 이름 메뉴가 없으므로 업데이트·정보 항목을 도움말에 둔다
+        ...(isMac
+          ? []
+          : [
+              { type: 'separator' },
+              { label: '업데이트 확인…', click: () => updater.check({ manual: true }) },
+              {
+                label: '자동으로 업데이트 확인',
+                type: 'checkbox',
+                checked: settings.autoUpdateCheck !== false,
+                click: (item) => setSetting({ autoUpdateCheck: item.checked }),
+              },
+              { type: 'separator' },
+              {
+                label: 'MD Editor 정보',
+                click: () =>
+                  dialog.showMessageBox(BrowserWindow.getFocusedWindow(), {
+                    type: 'info',
+                    title: 'MD Editor 정보',
+                    message: `MD Editor ${app.getVersion()}`,
+                    detail: '마크다운 편집기\nhttps://github.com/ReentaKim/md-editor',
+                  }),
+              },
+            ]),
       ],
     },
   ];
