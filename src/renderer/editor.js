@@ -101,9 +101,9 @@ export function createEditor(parent, { onChange, onScroll, onCursor, onPasteFile
   return view;
 }
 
-/** 새 문서 로드: 상태를 새로 만들어 실행 취소 기록까지 초기화 */
-export function setDocument(view, text) {
-  view.setState(EditorState.create({ doc: text, extensions: view.mdExtensions }));
+/** 탭마다 독립된 편집 상태(문서·커서·실행 취소 기록)를 만든다 */
+export function createState(view, text) {
+  return EditorState.create({ doc: text, extensions: view.mdExtensions });
 }
 
 /** 외부 변경 반영: 실행 취소 가능한 하나의 변경으로 교체, 커서 위치 최대한 유지 */
