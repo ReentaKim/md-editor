@@ -5,7 +5,7 @@
 ## 설치
 
 ```bash
-open "release/0.2.1/MD Editor-0.2.1-arm64.dmg"   # 창이 열리면 MD Editor를 응용 프로그램 폴더로 끌어다 놓기
+open "release/0.3.0/MD Editor-0.3.0-arm64.dmg"   # 창이 열리면 MD Editor를 응용 프로그램 폴더로 끌어다 놓기
 ```
 
 - `.md` 파일을 항상 MD Editor로 열려면: Finder에서 아무 `.md` 파일 선택 → `⌘I`(정보 가져오기) → "다음으로 열기"에서 MD Editor 선택 → **모두 변경**
@@ -48,6 +48,7 @@ npm run dist     # release/<버전>/ 에 .dmg 생성 (Apple Silicon)
 | HTML 내보내기 |
 | 오프라인 렌더링 |
 | 렌더러 sandbox |
+| 앱 업데이트 |
 | 렌더러의 파일 접근 |
 | 여러 문서를 동시에 열기 |
 

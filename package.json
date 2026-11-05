@@ -1,7 +1,7 @@
 {
   "name": "md-editor",
   "productName": "MD Editor",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "로컬 설치형 마크다운 편집기 (탭 · 실시간 미리보기 · PDF/HTML 내보내기)",
   "main": "src/main/main.js",
   "author": "ReentaKim <reenta.kim@gmail.com>",
