@@ -421,15 +421,25 @@ async function closeTab(id = doc?.id) {
     if (answer === 'cancel') return;
     if (answer === 'save' && !(await save(false, { tabId: tab.id }))) return;
   }
+  // 이미 빈 "제목 없음" 탭 하나만 남았을 때 ⌘W → 창을 닫는다
+  if (tabs.length === 1 && isBlank(tab)) return api.closeWindow();
   const index = tabs.indexOf(tab);
   tabs.splice(index, 1);
-  api.tabClosed(tab.id); // 마지막 탭이면 main이 창을 닫는다
-  if (!tabs.length) return;
+  api.tabClosed(tab.id);
+  if (!tabs.length) {
+    // 마지막 문서를 닫으면 창은 남기고 빈 "제목 없음" 탭으로 바꾼다
+    doc = null;
+    await newTab();
+    return;
+  }
   if (tab === doc) {
     doc = null;
     activateTab(tabs[Math.min(index, tabs.length - 1)].id);
   } else renderTabs();
 }
+
+/** 저장된 적 없고, 아무것도 입력하지 않은 탭 */
+const isBlank = (tab) => !tab.filePath && !tab.dirty && tabContent(tab) === '';
 
 function cycleTab(step) {
   if (tabs.length < 2) return;

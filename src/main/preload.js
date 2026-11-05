@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('api', {
   tabActivated: (tabId) => ipcRenderer.send('tab:activated', tabId),
   tabClosed: (tabId) => ipcRenderer.send('tab:closed', tabId),
   confirmCloseTab: (name) => ipcRenderer.invoke('tab:confirm-close', name),
+  closeWindow: () => ipcRenderer.send('window:close'),
 
   // 문서 (모두 탭 단위)
   save: (tabId, content, saveAs = false) => ipcRenderer.invoke('doc:save', { tabId, content, saveAs }),

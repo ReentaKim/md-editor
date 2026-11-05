@@ -385,9 +385,9 @@ ipcMain.on('tab:closed', (e, tabId) => {
   if (!tab) return;
   unwatch(tab);
   w.tabs.delete(tabId);
-  if (!w.tabs.size) w.win.close();
-  else updateTitle(w);
+  updateTitle(w);
 });
+ipcMain.on('window:close', (e) => winOf(e.sender)?.win.close());
 ipcMain.handle('tab:confirm-close', (e, name) => confirmClose(winOf(e.sender).win, name));
 
 ipcMain.handle('doc:save', async (e, { tabId, content, saveAs }) => {
