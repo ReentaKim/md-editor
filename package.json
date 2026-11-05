@@ -10,7 +10,7 @@
   "scripts": {
     "build": "node build.mjs",
     "start": "node build.mjs && electron .",
-    "dist": "node build.mjs && electron-builder --mac --arm64"
+    "dist": "node build.mjs && electron-builder --mac --arm64 && node scripts/clean-unpacked.mjs"
   },
   "build": {
     "appId": "io.github.reentakim.mdeditor",
