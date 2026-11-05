@@ -69,7 +69,8 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 button { font-family: inherit; color: inherit; }
-svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+/* UI 아이콘 전용 — 미리보기 안의 Mermaid·KaTeX SVG에는 적용하지 않는다 */
+svg:not(.markdown-body svg) { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
 /* ───────── 툴바 ───────── */
 #toolbar {

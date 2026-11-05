@@ -6,6 +6,7 @@ import footnote from 'markdown-it-footnote';
 import deflist from 'markdown-it-deflist';
 import abbr from 'markdown-it-abbr';
 import taskLists from 'markdown-it-task-lists';
+import cjkFriendly from 'markdown-it-cjk-friendly';
 import katexPlugin from '@vscode/markdown-it-katex';
 import hljs from 'highlight.js/lib/common';
 import DOMPurify from 'dompurify';
@@ -13,7 +14,10 @@ import DOMPurify from 'dompurify';
 const escapeHtml = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
 const md = new MarkdownIt({ html: true, linkify: true, typographer: false, breaks: false });
-md.use(footnote)
+// 한국어 문장의 강조 인식 보완: CommonMark 규칙에서는 `**42%**로`처럼 닫는 기호 앞이 문장부호이고
+// 뒤에 조사가 붙으면 굵게가 적용되지 않는다.
+md.use(cjkFriendly)
+  .use(footnote)
   .use(deflist)
   .use(abbr)
   .use(taskLists, { enabled: true })
