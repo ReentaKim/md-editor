@@ -1,5 +1,5 @@
 // MD Editor — renderer 진입점
-import { createEditor, setDocument, replaceDoc, applyFormat, editorCommands, toggleTaskAtLine } from './editor.js';
+import { createEditor, createState, replaceDoc, applyFormat, editorCommands, toggleTaskAtLine } from './editor.js';
 import { renderMarkdown, renderMermaid, slugify } from './markdown.js';
 import previewCss from './preview.css';
 
@@ -26,15 +26,19 @@ const el = {
   stRead: $('#st-read'),
   divider: $('#divider'),
   workspace: $('#workspace'),
+  tabs: $('#tabs'),
 };
 
-const doc = {
-  filePath: null,
-  name: '제목 없음',
-  dirUrl: null,
-  savedContent: '',
-  dirty: false,
-};
+/**
+ * 탭 = 문서 하나. 편집기(view)는 하나만 두고, 탭을 바꿀 때 EditorState를 통째로 교체한다.
+ * → 탭마다 실행 취소 기록·커서·스크롤 위치가 따로 유지된다.
+ * @typedef {{id:number, filePath:string|null, name:string, dirUrl:string|null, savedContent:string|null,
+ *   dirty:boolean, state:any, editorScroll:number, previewScroll:number, pendingExternal:string|null}} Tab
+ */
+/** @type {Tab[]} */
+const tabs = [];
+/** @type {Tab} 현재 활성 탭 */
+let doc = null;
 const prefs = { viewMode: 'split', sidebar: true, syncScroll: true, autosave: false };
 const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
 
@@ -61,24 +65,32 @@ function getContent() {
 }
 
 function onDocChanged() {
+  if (!doc) return;
   const content = getContent();
-  setDirty(content !== doc.savedContent);
+  setTabDirty(doc, content !== doc.savedContent);
   render(content);
   if (prefs.autosave && doc.filePath && doc.dirty) {
     clearTimeout(autosaveTimer);
-    autosaveTimer = setTimeout(() => save(false, { quiet: true }), 1200);
+    const tabId = doc.id;
+    autosaveTimer = setTimeout(() => save(false, { quiet: true, tabId }), 1200);
   }
 }
 
-function setDirty(dirty) {
-  if (dirty === doc.dirty) return;
-  doc.dirty = dirty;
-  document.body.classList.toggle('dirty', dirty);
-  api.setDirty(dirty);
-  updateSaveStatus();
+function setTabDirty(tab, dirty) {
+  if (dirty === tab.dirty) return;
+  tab.dirty = dirty;
+  api.setDirty(tab.id, dirty);
+  if (tab === doc) {
+    document.body.classList.toggle('dirty', dirty);
+    updateSaveStatus();
+  }
+  renderTabs();
 }
 
+const tabContent = (tab) => (tab === doc ? getContent() : tab.state.doc.toString());
+
 function updateSaveStatus(text) {
+  if (!doc) return;
   if (text) el.stSave.textContent = text;
   else el.stSave.textContent = doc.dirty ? (prefs.autosave && doc.filePath ? '자동 저장 대기' : '저장되지 않음') : doc.filePath ? '저장됨' : '';
 }
@@ -306,38 +318,130 @@ el.preview.addEventListener('dblclick', (e) => {
 });
 
 // ───────────────────────── 저장 / 열기 ─────────────────────────
-async function save(saveAs = false, { quiet = false } = {}) {
-  clearTimeout(autosaveTimer);
-  const content = getContent();
-  const result = await api.save(content, saveAs);
+async function save(saveAs = false, { quiet = false, tabId = doc?.id } = {}) {
+  const tab = tabs.find((t) => t.id === tabId);
+  if (!tab) return false;
+  if (tab === doc) clearTimeout(autosaveTimer);
+  const content = tabContent(tab);
+  const result = await api.save(tab.id, content, saveAs);
   if (!result) return false;
-  const pathChanged = result.filePath !== doc.filePath;
-  Object.assign(doc, { filePath: result.filePath, name: result.name, dirUrl: result.dirUrl, savedContent: content });
-  doc.dirty = true; // setDirty가 변경을 감지하도록
-  setDirty(getContent() !== content);
-  updateHeader();
-  if (pathChanged) {
-    render();
-    loadRecent();
+  const pathChanged = result.filePath !== tab.filePath;
+  Object.assign(tab, { filePath: result.filePath, name: result.name, dirUrl: result.dirUrl, savedContent: content });
+  tab.dirty = !tab.dirty; // setTabDirty가 항상 반영하도록
+  setTabDirty(tab, tabContent(tab) !== content);
+  renderTabs();
+  if (tab === doc) {
+    updateHeader();
+    if (pathChanged) render();
+    if (quiet) updateSaveStatus(`자동 저장됨 ${new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}`);
   }
+  if (pathChanged) loadRecent();
   if (!quiet) toast(`저장했습니다 — ${result.name}`);
-  else updateSaveStatus(`자동 저장됨 ${new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}`);
   return true;
 }
-// 창 닫기 확인 대화상자에서 main이 호출
-window.__mdEditor = { save: () => save(false) };
 
-function loadDocument({ content, filePath, name, dirUrl }) {
-  Object.assign(doc, { filePath, name, dirUrl, savedContent: content });
-  setDocument(view, content);
-  doc.dirty = true;
-  setDirty(false);
-  updateHeader();
-  render(content);
-  el.previewPane.scrollTop = 0;
-  loadRecent();
-  view.focus();
+function makeTab(id, data = {}) {
+  return {
+    id,
+    filePath: null,
+    name: '제목 없음',
+    dirUrl: null,
+    savedContent: '',
+    dirty: false,
+    state: createState(view, ''),
+    editorScroll: 0,
+    previewScroll: 0,
+    pendingExternal: null,
+    ...data,
+  };
 }
+
+/** main이 연 문서를 탭에 싣는다(빈 탭 재사용 또는 새 탭) */
+function loadDocument({ tabId, content, filePath, name, dirUrl }) {
+  let tab = tabs.find((t) => t.id === tabId);
+  if (!tab) {
+    tab = makeTab(tabId);
+    tabs.splice(doc ? tabs.indexOf(doc) + 1 : tabs.length, 0, tab);
+  }
+  Object.assign(tab, { filePath, name, dirUrl, savedContent: content, state: createState(view, content), editorScroll: 0, previewScroll: 0 });
+  tab.dirty = true;
+  setTabDirty(tab, false);
+  if (tab === doc) doc = null; // 같은 탭이라도 새 상태로 다시 활성화
+  activateTab(tab.id);
+}
+
+function activateTab(id) {
+  const tab = tabs.find((t) => t.id === id);
+  if (!tab) return;
+  if (doc && doc !== tab) {
+    doc.state = view.state;
+    doc.editorScroll = view.scrollDOM.scrollTop;
+    doc.previewScroll = el.previewPane.scrollTop;
+  }
+  const switching = doc !== tab;
+  doc = tab;
+  if (switching || view.state !== tab.state) view.setState(tab.state);
+  clearTimeout(autosaveTimer);
+  document.body.classList.toggle('dirty', tab.dirty);
+  updateHeader();
+  render(getContent());
+  suppressSync('editor');
+  suppressSync('preview');
+  requestAnimationFrame(() => {
+    view.scrollDOM.scrollTop = tab.editorScroll;
+    el.previewPane.scrollTop = tab.previewScroll;
+  });
+  const pos = view.state.selection.main.head;
+  const line = view.state.doc.lineAt(pos);
+  el.stCursor.textContent = `줄 ${line.number}, 열 ${pos - line.from + 1}`;
+  renderTabs();
+  loadRecent();
+  api.tabActivated(tab.id);
+  if (tab.pendingExternal != null) {
+    const content = tab.pendingExternal;
+    tab.pendingExternal = null;
+    handleExternalChange(tab, content);
+  }
+  if (prefs.viewMode !== 'preview') view.focus();
+}
+
+async function newTab() {
+  const id = await api.newTab();
+  const tab = makeTab(id);
+  tabs.splice(doc ? tabs.indexOf(doc) + 1 : tabs.length, 0, tab);
+  activateTab(id);
+}
+
+async function closeTab(id = doc?.id) {
+  const tab = tabs.find((t) => t.id === id);
+  if (!tab) return;
+  if (tab.dirty) {
+    if (tab !== doc) activateTab(tab.id);
+    const answer = await api.confirmCloseTab(tab.name);
+    if (answer === 'cancel') return;
+    if (answer === 'save' && !(await save(false, { tabId: tab.id }))) return;
+  }
+  const index = tabs.indexOf(tab);
+  tabs.splice(index, 1);
+  api.tabClosed(tab.id); // 마지막 탭이면 main이 창을 닫는다
+  if (!tabs.length) return;
+  if (tab === doc) {
+    doc = null;
+    activateTab(tabs[Math.min(index, tabs.length - 1)].id);
+  } else renderTabs();
+}
+
+function cycleTab(step) {
+  if (tabs.length < 2) return;
+  const i = tabs.indexOf(doc);
+  activateTab(tabs[(i + step + tabs.length) % tabs.length].id);
+}
+
+// 창 닫기 확인 대화상자에서 main이 호출
+window.__mdEditor = {
+  save: (tabId) => save(false, { tabId }),
+  activate: (tabId) => activateTab(tabId),
+};
 
 function updateHeader() {
   el.title.textContent = doc.name;
@@ -345,6 +449,81 @@ function updateHeader() {
   document.title = doc.name;
   updateSaveStatus();
 }
+
+// ───────────────────────── 탭 바 ─────────────────────────
+function renderTabs() {
+  el.tabs.replaceChildren(
+    ...tabs.map((tab) => {
+      const node = document.createElement('div');
+      node.className = 'tab';
+      node.dataset.id = tab.id;
+      node.draggable = true;
+      node.setAttribute('role', 'tab');
+      node.setAttribute('aria-selected', String(tab === doc));
+      node.title = tab.filePath || tab.name;
+      if (tab === doc) node.classList.add('active');
+      if (tab.dirty) node.classList.add('dirty');
+      node.innerHTML = '<svg class="tab-icon"><use href="#i-file"/></svg><span class="tab-name"></span><button class="tab-close" type="button" title="탭 닫기 (⌘W)"><svg><use href="#i-x"/></svg></button>';
+      node.querySelector('.tab-name').textContent = tab.name;
+      return node;
+    }),
+  );
+  el.tabs.querySelector('.tab.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+el.tabs.addEventListener('click', (e) => {
+  const node = e.target.closest('.tab');
+  if (!node) return;
+  const id = Number(node.dataset.id);
+  if (e.target.closest('.tab-close')) closeTab(id);
+  else if (id !== doc?.id) activateTab(id);
+});
+el.tabs.addEventListener('auxclick', (e) => {
+  const node = e.target.closest('.tab');
+  if (node && e.button === 1) closeTab(Number(node.dataset.id)); // 가운데 버튼으로 닫기
+});
+el.tabs.addEventListener('dblclick', (e) => {
+  if (!e.target.closest('.tab')) newTab(); // 빈 곳 더블클릭 → 새 탭
+});
+$('#tab-add').addEventListener('click', () => newTab());
+// 세로 휠로도 탭 목록 가로 스크롤
+el.tabs.addEventListener('wheel', (e) => {
+  if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+    el.tabs.scrollLeft += e.deltaY;
+    e.preventDefault();
+  }
+}, { passive: false });
+
+// 끌어서 순서 바꾸기
+let draggingTabId = null;
+el.tabs.addEventListener('dragstart', (e) => {
+  const node = e.target.closest('.tab');
+  if (!node) return;
+  draggingTabId = Number(node.dataset.id);
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('application/x-md-tab', String(draggingTabId));
+  node.classList.add('dragging');
+});
+el.tabs.addEventListener('dragover', (e) => {
+  if (draggingTabId == null) return;
+  e.preventDefault();
+  const over = e.target.closest('.tab');
+  if (!over || Number(over.dataset.id) === draggingTabId) return;
+  const from = tabs.findIndex((t) => t.id === draggingTabId);
+  const rect = over.getBoundingClientRect();
+  let to = tabs.findIndex((t) => t.id === Number(over.dataset.id));
+  if (e.clientX > rect.left + rect.width / 2) to += 1;
+  if (from < to) to -= 1;
+  if (from === to) return;
+  const [moved] = tabs.splice(from, 1);
+  tabs.splice(to, 0, moved);
+  renderTabs();
+  el.tabs.querySelector(`.tab[data-id="${draggingTabId}"]`)?.classList.add('dragging');
+});
+el.tabs.addEventListener('dragend', () => {
+  draggingTabId = null;
+  el.tabs.querySelector('.tab.dragging')?.classList.remove('dragging');
+});
 
 // ───────────────────────── 이미지 붙여넣기 / 끌어놓기 ─────────────────────────
 async function insertImages(files, pos) {
@@ -357,7 +536,7 @@ async function insertImages(files, pos) {
     const sourcePath = api.pathForFile(file) || null;
     const ext = (file.type.split('/')[1] || 'png').replace('jpeg', 'jpg').replace('svg+xml', 'svg');
     const data = sourcePath ? null : new Uint8Array(await file.arrayBuffer());
-    const rel = await api.saveImage({ data, ext, sourcePath });
+    const rel = await api.saveImage({ tabId: doc.id, data, ext, sourcePath });
     if (rel) snippets.push(`![${file.name && sourcePath ? file.name.replace(/\.[^.]+$/, '') : '이미지'}](${encodeURI(rel)})`);
   }
   if (!snippets.length) return;
@@ -415,7 +594,8 @@ async function loadRecent() {
     ...items.map((item) => {
       const li = document.createElement('li');
       li.className = 'recent-item';
-      if (item.path === doc.filePath) li.classList.add('current');
+      if (item.path === doc?.filePath) li.classList.add('current');
+      else if (tabs.some((t) => t.filePath === item.path)) li.classList.add('open');
       if (!item.exists) li.classList.add('missing');
       li.title = item.exists ? item.path : `${item.path}\n(파일을 찾을 수 없습니다)`;
       li.innerHTML = '<svg class="ri-icon"><use href="#i-file"/></svg><div class="ri-text"><div class="ri-name"></div><div class="ri-dir"></div></div><button class="ri-remove" type="button" title="목록에서 제거"><svg><use href="#i-x"/></svg></button>';
@@ -487,7 +667,7 @@ async function exportPdf() {
   render();
   const dark = darkQuery.matches;
   if (dark) await renderMermaid(el.preview, false); // 인쇄물은 항상 밝은 다이어그램
-  const out = await api.exportPdf();
+  const out = await api.exportPdf(doc.id);
   if (dark) render();
   if (out) toast(`PDF로 내보냈습니다 — ${out.split(/[\\/]/).pop()}`);
 }
@@ -516,7 +696,7 @@ ${body.innerHTML}
 </body>
 </html>
 `;
-  const out = await api.exportHtml(html);
+  const out = await api.exportHtml(doc.id, html);
   if (out) toast(`HTML로 내보냈습니다 — ${out.split(/[\\/]/).pop()}`);
 }
 
@@ -538,7 +718,11 @@ const commands = {
   saveAs: () => save(true),
   exportPdf,
   exportHtml,
-  reveal: () => api.reveal(),
+  reveal: () => api.reveal(doc.id),
+  newTab: () => newTab(),
+  closeTab: () => closeTab(),
+  nextTab: () => cycleTab(1),
+  prevTab: () => cycleTab(-1),
   toggleSidebar: () => api.setSettings({ sidebar: !prefs.sidebar }),
   undo: () => (isEditorFocused() ? editorCommands.undo(view) : document.execCommand('undo')),
   redo: () => (isEditorFocused() ? editorCommands.redo(view) : document.execCommand('redo')),
@@ -557,51 +741,62 @@ api.onMenu((cmd, arg) => commands[cmd]?.(arg));
 document.querySelectorAll('[data-format]').forEach((b) => b.addEventListener('click', () => commands.format(b.dataset.format)));
 document.querySelectorAll('[data-action]').forEach((b) => b.addEventListener('click', () => commands[b.dataset.action]?.()));
 document.querySelectorAll('[data-view-mode]').forEach((b) => b.addEventListener('click', () => api.setSettings({ viewMode: b.dataset.viewMode })));
-el.stPath.addEventListener('click', () => doc.filePath && api.reveal());
+el.stPath.addEventListener('click', () => doc?.filePath && api.reveal(doc.id));
 
 api.onSettings((patch) => {
   Object.assign(prefs, patch);
   applyPrefs();
-  if ('autosave' in patch && patch.autosave && doc.dirty && doc.filePath) save(false, { quiet: true });
+  if ('autosave' in patch && patch.autosave && doc?.dirty && doc.filePath) save(false, { quiet: true });
 });
 darkQuery.addEventListener('change', () => render());
 
 // ───────────────────────── 외부 변경 ─────────────────────────
-api.onExternalChange(async ({ content }) => {
-  if (content === getContent()) {
-    doc.savedContent = content;
-    setDirty(false);
+async function handleExternalChange(tab, content) {
+  if (content === tabContent(tab)) {
+    tab.savedContent = content;
+    setTabDirty(tab, false);
     return;
   }
-  if (!doc.dirty || (await api.confirmReload())) {
+  if (tab !== doc) {
+    // 보이지 않는 탭: 편집 중이 아니면 조용히 반영, 편집 중이면 그 탭을 열 때 묻는다
+    if (!tab.dirty) {
+      tab.state = tab.state.update({ changes: { from: 0, to: tab.state.doc.length, insert: content } }).state;
+      tab.savedContent = content;
+      toast(`"${tab.name}" — 다른 프로그램에서 변경된 내용을 불러왔습니다`);
+    } else tab.pendingExternal = content;
+    return;
+  }
+  if (!tab.dirty || (await api.confirmReload(tab.name))) {
     replaceDoc(view, content);
-    doc.savedContent = content;
-    setDirty(false);
+    tab.savedContent = content;
+    setTabDirty(tab, false);
     render(content);
     toast('다른 프로그램에서 변경된 내용을 불러왔습니다');
   } else {
-    doc.savedContent = content; // 이후 저장 시 덮어씀
-    setDirty(true);
+    tab.savedContent = content; // 이후 저장 시 덮어씀
+    setTabDirty(tab, true);
   }
+}
+api.onExternalChange(({ tabId, content }) => {
+  const tab = tabs.find((t) => t.id === tabId);
+  if (tab) handleExternalChange(tab, content);
 });
-api.onExternalDelete(() => {
-  doc.savedContent = null;
-  setDirty(true);
-  toast('파일이 삭제되었거나 이동되었습니다. 저장하면 다시 만들어집니다.', 'error');
+api.onExternalDelete(({ tabId }) => {
+  const tab = tabs.find((t) => t.id === tabId);
+  if (!tab) return;
+  tab.savedContent = null;
+  setTabDirty(tab, true);
+  toast(`"${tab.name}" 파일이 삭제되었거나 이동되었습니다. 저장하면 다시 만들어집니다.`, 'error');
 });
 
 api.onLoad(loadDocument);
+api.onTabActivate((tabId) => activateTab(tabId));
 
 // ───────────────────────── 시작 ─────────────────────────
 (async () => {
-  const { settings, doc: initialDoc } = await api.ready();
+  const { settings, tabId } = await api.ready();
   Object.assign(prefs, settings);
   applyPrefs();
-  if (initialDoc) loadDocument(initialDoc);
-  else {
-    updateHeader();
-    render('');
-    loadRecent();
-    view.focus();
-  }
+  tabs.push(makeTab(tabId));
+  activateTab(tabId);
 })();

@@ -26,6 +26,7 @@
   --editor-font-size: 14.5px;
   --toolbar-h: 46px;
   --status-h: 26px;
+  --tabbar-h: 36px;
   --sidebar-w: 240px;
   --split: 50%;
   color-scheme: light dark;
@@ -64,7 +65,7 @@ body {
   font-size: 13px;
   overflow: hidden;
   display: grid;
-  grid-template-rows: var(--toolbar-h) 1fr var(--status-h);
+  grid-template-rows: var(--toolbar-h) var(--tabbar-h) 1fr var(--status-h);
   -webkit-font-smoothing: antialiased;
 }
 button { font-family: inherit; color: inherit; }
@@ -139,6 +140,84 @@ body.dirty #dirty-dot { display: block; }
 .segmented button.active { background: var(--bg); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,.12); font-weight: 600; }
 @media (max-width: 1180px) { .tb-more { display: none; } }
 @media (max-width: 1000px) { .tb-format { display: none; } }
+
+/* ───────── 탭 바 ───────── */
+#tabbar {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  padding: 0 8px 0 0;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+#tabs {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+#tabs::-webkit-scrollbar { display: none; }
+#tab-add { align-self: center; flex-shrink: 0; }
+.tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 200px;
+  min-width: 120px;
+  max-width: 220px;
+  padding: 0 6px 0 12px;
+  border-right: 1px solid var(--border);
+  color: var(--fg-muted);
+  cursor: default;
+  user-select: none;
+  font-size: 12.5px;
+}
+.tab:hover { background: var(--hover); color: var(--fg); }
+.tab.active {
+  background: var(--bg);
+  color: var(--fg);
+  font-weight: 600;
+  margin-bottom: -1px; /* 아래 테두리를 덮어 본문과 이어지게 */
+}
+.tab.active::before {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  height: 2px;
+  background: var(--accent);
+}
+.tab.dragging { opacity: 0.45; }
+.tab-icon { width: 14px; height: 14px; flex-shrink: 0; opacity: 0.6; }
+.tab-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab-close {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  opacity: 0;
+}
+.tab-close svg { width: 13px; height: 13px; }
+.tab:hover .tab-close, .tab.active .tab-close { opacity: 1; }
+.tab-close:hover { background: var(--hover); color: var(--fg); }
+/* 저장 안 된 탭: 닫기 버튼 자리에 점, 마우스를 올리면 다시 X */
+.tab.dirty .tab-close { opacity: 1; }
+.tab.dirty .tab-close svg { display: none; }
+.tab.dirty .tab-close::after { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--fg-muted); }
+.tab.dirty .tab-close:hover svg { display: block; }
+.tab.dirty .tab-close:hover::after { display: none; }
+
+.recent-item.open .ri-name::after { content: ' · 열림'; color: var(--fg-faint); font-weight: 400; font-size: 11px; }
 
 /* ───────── 작업 영역 레이아웃 ───────── */
 #workspace {
@@ -281,7 +360,7 @@ body.dragging-file #drop-overlay { display: grid; }
 /* ───────── PDF 출력 시 문서만 ───────── */
 @media print {
   body { display: block; overflow: visible; height: auto; background: #fff; }
-  #toolbar, #sidebar, #editor-pane, #divider, #statusbar, #drop-overlay, #toasts { display: none !important; }
+  #toolbar, #tabbar, #sidebar, #editor-pane, #divider, #statusbar, #drop-overlay, #toasts { display: none !important; }
   #workspace { display: block; overflow: visible; }
   #preview-pane { visibility: visible !important; overflow: visible; background: #fff !important; }
 }

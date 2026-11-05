@@ -1,5 +1,5 @@
 // MD Editor — main process
-// 문서 1개 = 창 1개. 각 창의 파일 경로/변경 여부/파일 감시 상태를 docs 맵에서 관리한다.
+// 창 1개 = 탭 여러 개. 탭마다 파일 경로/변경 여부/파일 감시 상태를 main에서 관리한다.
 const { app, BrowserWindow, Menu, dialog, ipcMain, shell, nativeTheme } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -55,24 +55,45 @@ function removeRecent(filePath) {
 function recentChanged() {
   saveSettings();
   buildMenu();
-  for (const win of BrowserWindow.getAllWindows()) win.webContents.send('recent:changed');
+  for (const w of windows.values()) w.win.webContents.send('recent:changed');
 }
 const isMarkdownPath = (p) => typeof p === 'string' && MD_EXTENSIONS.includes(path.extname(p).slice(1).toLowerCase());
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'];
 
-// ───────────────────────── 창 / 문서 상태 ─────────────────────────
-/** @type {Map<number, {win: BrowserWindow, filePath: string|null, dirty: boolean, diskContent: string|null, ignoreUntil: number, forceClose: boolean, pending: string|null}>} */
-const docs = new Map();
+// ───────────────────────── 창 / 탭 상태 ─────────────────────────
+/**
+ * @typedef {{id:number, w:WinState, filePath:string|null, dirty:boolean, diskContent:string|null, ignoreUntil:number, blank:boolean, unwatch?:Function|null}} TabState
+ * @typedef {{win:BrowserWindow, tabs:Map<number,TabState>, activeTab:number|null, ready:boolean, queue:Array, forceClose:boolean}} WinState
+ */
+/** @type {Map<number, WinState>} webContents.id → 창 상태 */
+const windows = new Map();
+let tabSeq = 0;
 let quitting = false;
+let lastFocused = null; // 앱이 비활성일 때(Finder에서 열기) 사용할 창
 const pendingOpenPaths = []; // 앱 준비 전 Finder "다음으로 열기"로 들어온 파일
 
-const stateOf = (webContents) => docs.get(webContents.id);
-const focusedState = () => {
-  const win = BrowserWindow.getFocusedWindow();
-  return win ? docs.get(win.webContents.id) : null;
-};
+const winOf = (sender) => windows.get(sender.id);
+const tabOf = (sender, tabId) => winOf(sender)?.tabs.get(tabId);
+function targetWindow() {
+  const focused = BrowserWindow.getFocusedWindow();
+  if (focused) return windows.get(focused.webContents.id) || null;
+  if (lastFocused && !lastFocused.win.isDestroyed()) return lastFocused;
+  return [...windows.values()].pop() || null;
+}
 
-function createWindow(filePath = null, initialContent = null) {
+function newTab(w) {
+  const tab = { id: ++tabSeq, w, filePath: null, dirty: false, diskContent: null, ignoreUntil: 0, blank: true, unwatch: null };
+  w.tabs.set(tab.id, tab);
+  return tab;
+}
+/** 아무것도 입력하지 않은 빈 탭이면 재사용 */
+function reusableTab(w) {
+  const t = w.tabs.get(w.activeTab);
+  return t && t.blank && !t.filePath && !t.dirty ? t : null;
+}
+
+/** @param {Array<{filePath?:string, content?:string, name?:string}>} queue 창이 준비되면 열 문서들 */
+function createWindow(queue = []) {
   const focused = BrowserWindow.getFocusedWindow();
   const { width, height } = settings.windowBounds;
   const win = new BrowserWindow({
@@ -98,74 +119,91 @@ function createWindow(filePath = null, initialContent = null) {
     win.setPosition(x + 28, y + 28);
   }
 
-  const state = { win, filePath: null, dirty: false, diskContent: null, ignoreUntil: 0, forceClose: false, pending: filePath, pendingContent: initialContent };
+  /** @type {WinState} */
+  const w = { win, tabs: new Map(), activeTab: null, ready: false, queue, forceClose: false };
   const id = win.webContents.id;
-  docs.set(id, state);
+  windows.set(id, w);
 
   win.loadFile(path.join(__dirname, '..', '..', 'dist', 'index.html'));
-  win.once('ready-to-show', () => win.show());
+  // 테스트 실행(MD_EDITOR_USER_DATA) 때는 사용자가 쓰던 앱의 포커스를 빼앗지 않는다
+  win.once('ready-to-show', () => (process.env.MD_EDITOR_USER_DATA ? win.showInactive() : win.show()));
+  win.on('focus', () => (lastFocused = w));
 
   // 미리보기 안의 링크가 앱 창을 이동시키지 못하도록 막고, 외부 링크는 브라우저로 연다.
   win.webContents.on('will-navigate', (e, url) => {
     e.preventDefault();
-    openLink(state, url);
+    openLink(url);
   });
   win.webContents.setWindowOpenHandler(({ url }) => {
-    openLink(state, url);
+    openLink(url);
     return { action: 'deny' };
   });
 
   win.on('resize', () => {
     if (!win.isMaximized() && !win.isFullScreen()) {
-      const [w, h] = win.getSize();
-      settings.windowBounds = { width: w, height: h };
+      const [width, height] = win.getSize();
+      settings.windowBounds = { width, height };
       saveSettings();
     }
   });
 
+  // 창을 닫을 때: 저장 안 된 탭마다 차례로 확인
   win.on('close', async (e) => {
-    if (!state.dirty || state.forceClose) return;
+    if (w.forceClose) return;
+    const dirtyTabs = [...w.tabs.values()].filter((t) => t.dirty);
+    if (!dirtyTabs.length) return;
     e.preventDefault();
-    const name = state.filePath ? path.basename(state.filePath) : '제목 없음';
-    const { response } = await dialog.showMessageBox(win, {
-      type: 'warning',
-      buttons: ['저장', '저장 안 함', '취소'],
-      defaultId: 0,
-      cancelId: 2,
-      message: `"${name}" 문서의 변경 사항을 저장하시겠습니까?`,
-      detail: '저장하지 않으면 변경 사항이 사라집니다.',
-    });
-    if (response === 2) {
-      quitting = false;
-      return;
-    }
-    if (response === 0) {
-      const saved = await win.webContents.executeJavaScript('window.__mdEditor.save()').catch(() => false);
-      if (!saved) {
+    for (const t of dirtyTabs) {
+      await win.webContents.executeJavaScript(`window.__mdEditor.activate(${t.id})`).catch(() => {});
+      const answer = await confirmClose(win, tabName(t));
+      if (answer === 'cancel') {
         quitting = false;
         return;
       }
+      if (answer === 'save') {
+        const saved = await win.webContents.executeJavaScript(`window.__mdEditor.save(${t.id})`).catch(() => false);
+        if (!saved) {
+          quitting = false;
+          return;
+        }
+      }
     }
-    state.forceClose = true;
+    w.forceClose = true;
     win.close();
     if (quitting) app.quit();
   });
 
   win.on('closed', () => {
-    unwatch(state);
-    docs.delete(id);
+    for (const t of w.tabs.values()) unwatch(t);
+    windows.delete(id);
+    if (lastFocused === w) lastFocused = null;
   });
 
-  return win;
+  return w;
 }
 
-function updateTitle(state) {
-  const { win, filePath, dirty } = state;
+const tabName = (t) => (t.filePath ? path.basename(t.filePath) : t.name || '제목 없음');
+
+async function confirmClose(win, name) {
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'warning',
+    buttons: ['저장', '저장 안 함', '취소'],
+    defaultId: 0,
+    cancelId: 2,
+    message: `"${name}" 문서의 변경 사항을 저장하시겠습니까?`,
+    detail: '저장하지 않으면 변경 사항이 사라집니다.',
+  });
+  return ['save', 'discard', 'cancel'][response];
+}
+
+function updateTitle(w) {
+  const { win } = w;
   if (win.isDestroyed()) return;
-  win.setTitle(filePath ? path.basename(filePath) : '제목 없음');
+  const t = w.tabs.get(w.activeTab);
+  win.setTitle(t ? tabName(t) : 'MD Editor');
   if (isMac) {
-    win.setRepresentedFilename(filePath || '');
-    win.setDocumentEdited(dirty);
+    win.setRepresentedFilename(t?.filePath || '');
+    win.setDocumentEdited([...w.tabs.values()].some((x) => x.dirty));
   }
 }
 
@@ -180,41 +218,58 @@ async function readDoc(filePath) {
   };
 }
 
-/** 이미 열린 파일이면 그 창에 포커스, 비어 있는 창이면 재사용, 아니면 새 창 */
-async function openPath(filePath, targetState = focusedState()) {
+/** 이미 열린 파일이면 그 탭으로 이동, 아니면 대상 창에 새 탭(빈 탭이면 재사용) */
+async function openPath(filePath, w = targetWindow()) {
   filePath = path.resolve(filePath);
-  for (const s of docs.values()) {
-    if (s.filePath === filePath) {
-      s.win.show();
-      s.win.focus();
-      return;
+  for (const other of windows.values()) {
+    for (const t of other.tabs.values()) {
+      if (t.filePath === filePath) {
+        other.win.show();
+        other.win.focus();
+        other.win.webContents.send('tab:activate', t.id);
+        return;
+      }
     }
   }
-  if (targetState && !targetState.filePath && !targetState.dirty && !targetState.win.isDestroyed()) {
-    await loadInto(targetState, filePath);
-  } else {
-    createWindow(filePath);
+  if (!w || w.win.isDestroyed()) return void createWindow([{ filePath }]);
+  if (!w.ready) return void w.queue.push({ filePath });
+  if (!process.env.MD_EDITOR_USER_DATA) {
+    w.win.show();
+    w.win.focus();
   }
+  const reused = reusableTab(w);
+  const tab = reused ?? newTab(w);
+  // 새로 만든 탭인데 열기에 실패하면 렌더러는 그 탭을 모르므로 main에서만 지운다
+  if (!(await loadInto(tab, filePath)) && !reused) w.tabs.delete(tab.id);
 }
 
-async function loadInto(state, filePath) {
+async function loadInto(tab, filePath) {
   try {
     const doc = await readDoc(filePath);
-    state.filePath = filePath;
-    state.diskContent = doc.content;
-    state.dirty = false;
-    state.win.webContents.send('doc:load', doc);
-    watch(state);
+    Object.assign(tab, { filePath, diskContent: doc.content, dirty: false, blank: false });
+    tab.w.win.webContents.send('doc:load', { tabId: tab.id, ...doc });
+    watch(tab);
     addRecent(filePath);
-    updateTitle(state);
+    updateTitle(tab.w);
+    return true;
   } catch (err) {
     dialog.showErrorBox('파일을 열 수 없습니다', `${filePath}\n\n${err.message}`);
     removeRecent(filePath);
+    return false;
   }
 }
 
-async function showOpenDialog(state) {
-  const { canceled, filePaths } = await dialog.showOpenDialog(state?.win, {
+/** 파일이 아닌 내용(예: 문법 예제)을 새 탭으로 */
+function openContent(w, content, name) {
+  if (!w || w.win.isDestroyed()) return void createWindow([{ content, name }]);
+  if (!w.ready) return void w.queue.push({ content, name });
+  const tab = reusableTab(w) ?? newTab(w);
+  Object.assign(tab, { blank: false, name });
+  w.win.webContents.send('doc:load', { tabId: tab.id, content, filePath: null, name, dirUrl: null });
+}
+
+async function showOpenDialog(w) {
+  const { canceled, filePaths } = await dialog.showOpenDialog(w?.win, {
     properties: ['openFile', 'multiSelections'],
     filters: [
       { name: 'Markdown', extensions: MD_EXTENSIONS },
@@ -222,71 +277,70 @@ async function showOpenDialog(state) {
     ],
   });
   if (canceled) return;
-  for (const p of filePaths) await openPath(p, state);
+  for (const p of filePaths) await openPath(p, w);
 }
 
-async function writeDoc(state, content, saveAs) {
-  let target = state.filePath;
+async function writeDoc(tab, content, saveAs) {
+  let target = tab.filePath;
   if (!target || saveAs) {
-    const { canceled, filePath } = await dialog.showSaveDialog(state.win, {
-      defaultPath: target || path.join(app.getPath('documents'), '제목 없음.md'),
+    const { canceled, filePath } = await dialog.showSaveDialog(tab.w.win, {
+      defaultPath: target || path.join(app.getPath('documents'), `${(tab.name || '제목 없음').replace(/\.md$/, '')}.md`),
       filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
     });
     if (canceled || !filePath) return null;
     target = filePath;
   }
-  state.ignoreUntil = Date.now() + 1500; // 우리가 쓴 변경은 외부 변경으로 감지하지 않음
+  tab.ignoreUntil = Date.now() + 1500; // 우리가 쓴 변경은 외부 변경으로 감지하지 않음
   await fsp.writeFile(target, content, 'utf8');
-  const changedPath = target !== state.filePath;
-  state.filePath = target;
-  state.diskContent = content;
-  state.dirty = false;
+  const changedPath = target !== tab.filePath;
+  Object.assign(tab, { filePath: target, diskContent: content, dirty: false, blank: false });
   if (changedPath) {
-    watch(state);
+    watch(tab);
     addRecent(target);
   }
-  updateTitle(state);
+  updateTitle(tab.w);
   return { filePath: target, name: path.basename(target), dirUrl: pathToFileURL(path.dirname(target) + path.sep).href };
 }
 
 // ───────────────────────── 외부 변경 감지 ─────────────────────────
 // fs.watchFile(폴링)은 에디터들의 "원자적 저장(rename)"에도 끊기지 않는다.
-function watch(state) {
-  unwatch(state);
-  const file = state.filePath;
+function watch(tab) {
+  unwatch(tab);
+  const file = tab.filePath;
   if (!file) return;
   const listener = async (curr, prev) => {
-    if (curr.mtimeMs === prev.mtimeMs || Date.now() < state.ignoreUntil || state.win.isDestroyed()) return;
+    const { win } = tab.w;
+    if (curr.mtimeMs === prev.mtimeMs || Date.now() < tab.ignoreUntil || win.isDestroyed()) return;
     if (curr.nlink === 0) {
-      state.win.webContents.send('doc:external-deleted');
+      win.webContents.send('doc:external-deleted', { tabId: tab.id });
       return;
     }
     try {
       const content = await fsp.readFile(file, 'utf8');
-      if (content === state.diskContent) return;
-      state.diskContent = content;
-      state.win.webContents.send('doc:external-change', { content, dirty: state.dirty });
+      if (content === tab.diskContent) return;
+      tab.diskContent = content;
+      win.webContents.send('doc:external-change', { tabId: tab.id, content });
     } catch {
       /* 일시적인 쓰기 중 상태 */
     }
   };
   fs.watchFile(file, { interval: 800 }, listener);
-  state.unwatch = () => fs.unwatchFile(file, listener);
+  tab.unwatch = () => fs.unwatchFile(file, listener);
 }
-function unwatch(state) {
-  state.unwatch?.();
-  state.unwatch = null;
+function unwatch(tab) {
+  tab.unwatch?.();
+  tab.unwatch = null;
 }
 
 // ───────────────────────── 링크 처리 ─────────────────────────
-function openLink(state, url) {
+function openLink(url) {
   try {
     const u = new URL(url);
     if (u.protocol === 'http:' || u.protocol === 'https:' || u.protocol === 'mailto:') {
       shell.openExternal(url);
     } else if (u.protocol === 'file:') {
       const p = fileURLToPath(u);
-      if (MD_EXTENSIONS.includes(path.extname(p).slice(1).toLowerCase())) openPath(p, null);
+      if (isMarkdownPath(p)) openPath(p);
       else shell.openPath(p);
     }
   } catch {
@@ -295,70 +349,85 @@ function openLink(state, url) {
 }
 
 // ───────────────────────── IPC ─────────────────────────
-ipcMain.handle('renderer-ready', async (e) => {
-  const state = stateOf(e.sender);
-  const initial = {
-    settings: { viewMode: settings.viewMode, sidebar: settings.sidebar, syncScroll: settings.syncScroll, autosave: settings.autosave, theme: settings.theme },
-    doc: null,
-  };
-  if (state?.pendingContent != null) {
-    initial.doc = { content: state.pendingContent, filePath: null, name: '제목 없음', dirUrl: null };
-    state.pendingContent = null;
-  } else if (state?.pending) {
-    const p = state.pending;
-    state.pending = null;
-    try {
-      initial.doc = await readDoc(p);
-      state.filePath = p;
-      state.diskContent = initial.doc.content;
-      watch(state);
-      addRecent(p);
-    } catch (err) {
-      dialog.showErrorBox('파일을 열 수 없습니다', `${p}\n\n${err.message}`);
+ipcMain.handle('renderer-ready', (e) => {
+  const w = winOf(e.sender);
+  const first = newTab(w);
+  w.activeTab = first.id;
+  w.ready = true;
+  // 응답이 먼저 도착하도록 다음 틱에 대기 중인 문서를 연다
+  setImmediate(async () => {
+    for (const item of w.queue.splice(0)) {
+      if (item.filePath) await openPath(item.filePath, w);
+      else openContent(w, item.content, item.name);
     }
-  }
-  if (state) updateTitle(state);
-  return initial;
+  });
+  updateTitle(w);
+  return {
+    settings: { viewMode: settings.viewMode, sidebar: settings.sidebar, syncScroll: settings.syncScroll, autosave: settings.autosave, theme: settings.theme },
+    tabId: first.id,
+  };
 });
 
-ipcMain.handle('doc:save', async (e, { content, saveAs }) => {
-  const state = stateOf(e.sender);
+ipcMain.handle('tab:new', (e) => {
+  const w = winOf(e.sender);
+  const tab = newTab(w);
+  return tab.id;
+});
+ipcMain.on('tab:activated', (e, tabId) => {
+  const w = winOf(e.sender);
+  if (!w?.tabs.has(tabId)) return;
+  w.activeTab = tabId;
+  updateTitle(w);
+});
+ipcMain.on('tab:closed', (e, tabId) => {
+  const w = winOf(e.sender);
+  const tab = w?.tabs.get(tabId);
+  if (!tab) return;
+  unwatch(tab);
+  w.tabs.delete(tabId);
+  if (!w.tabs.size) w.win.close();
+  else updateTitle(w);
+});
+ipcMain.handle('tab:confirm-close', (e, name) => confirmClose(winOf(e.sender).win, name));
+
+ipcMain.handle('doc:save', async (e, { tabId, content, saveAs }) => {
+  const tab = tabOf(e.sender, tabId);
+  if (!tab) return null;
   try {
-    return await writeDoc(state, content, saveAs);
+    return await writeDoc(tab, content, saveAs);
   } catch (err) {
     dialog.showErrorBox('저장 실패', err.message);
     return null;
   }
 });
 
-ipcMain.on('doc:dirty', (e, dirty) => {
-  const state = stateOf(e.sender);
-  if (!state) return;
-  state.dirty = dirty;
-  updateTitle(state);
+ipcMain.on('doc:dirty', (e, tabId, dirty) => {
+  const tab = tabOf(e.sender, tabId);
+  if (!tab) return;
+  tab.dirty = dirty;
+  if (dirty) tab.blank = false;
+  updateTitle(tab.w);
 });
 
-ipcMain.handle('doc:confirm-reload', async (e) => {
-  const state = stateOf(e.sender);
-  const { response } = await dialog.showMessageBox(state.win, {
+ipcMain.handle('doc:confirm-reload', async (e, name) => {
+  const { response } = await dialog.showMessageBox(winOf(e.sender).win, {
     type: 'question',
     buttons: ['디스크 버전 불러오기', '내 편집 유지'],
     defaultId: 1,
     cancelId: 1,
-    message: '다른 프로그램에서 파일이 변경되었습니다.',
+    message: `다른 프로그램에서 "${name}" 파일이 변경되었습니다.`,
     detail: '현재 저장하지 않은 편집 내용이 있습니다. 디스크의 버전으로 바꾸면 편집 내용이 사라집니다.',
   });
   return response === 0;
 });
 
-ipcMain.handle('doc:open-dialog', (e) => showOpenDialog(stateOf(e.sender)));
+ipcMain.handle('doc:open-dialog', (e) => showOpenDialog(winOf(e.sender)));
 // 렌더러가 임의 경로를 열지 못하도록: 사용자가 직접 끌어다 놓은 마크다운 파일만 허용
 ipcMain.handle('doc:open-dropped', (e, p) => {
   if (!isMarkdownPath(p) || !path.isAbsolute(p)) return false;
-  openPath(p, stateOf(e.sender));
+  openPath(p, winOf(e.sender));
   return true;
 });
-ipcMain.handle('doc:new', () => createWindow());
 
 // 최근 문서 — 폴더 탐색 없이, 사용자가 이미 연 적 있는 파일만 노출
 const home = app.getPath('home');
@@ -375,7 +444,7 @@ ipcMain.handle('recent:list', () =>
 );
 ipcMain.handle('recent:open', (e, p) => {
   if (!settings.recentFiles.includes(p)) return false;
-  openPath(p, stateOf(e.sender));
+  openPath(p, winOf(e.sender));
   return true;
 });
 ipcMain.handle('recent:remove', (_e, p) => removeRecent(p));
@@ -385,10 +454,10 @@ ipcMain.handle('recent:clear', () => {
 });
 
 // 붙여넣기/드롭한 이미지를 문서 옆 assets/ 폴더에 저장하고 상대 경로를 돌려준다.
-ipcMain.handle('fs:save-image', async (e, { data, ext, sourcePath }) => {
-  const state = stateOf(e.sender);
-  if (!state?.filePath || !IMAGE_EXTENSIONS.includes(String(ext).toLowerCase())) return null;
-  const docDir = path.dirname(state.filePath);
+ipcMain.handle('fs:save-image', async (e, { tabId, data, ext, sourcePath }) => {
+  const tab = tabOf(e.sender, tabId);
+  if (!tab?.filePath || !IMAGE_EXTENSIONS.includes(String(ext).toLowerCase())) return null;
+  const docDir = path.dirname(tab.filePath);
   const assetsDir = path.join(docDir, 'assets');
   await fsp.mkdir(assetsDir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
@@ -399,20 +468,23 @@ ipcMain.handle('fs:save-image', async (e, { data, ext, sourcePath }) => {
   if (sourcePath) {
     if (!IMAGE_EXTENSIONS.includes(path.extname(sourcePath).slice(1).toLowerCase())) return null;
     await fsp.copyFile(sourcePath, target);
-  }
-  else await fsp.writeFile(target, Buffer.from(data));
+  } else await fsp.writeFile(target, Buffer.from(data));
   return path.relative(docDir, target).split(path.sep).join('/');
 });
 
-ipcMain.handle('export:pdf', async (e) => {
-  const state = stateOf(e.sender);
-  const base = state.filePath ? path.basename(state.filePath, path.extname(state.filePath)) : '제목 없음';
-  const { canceled, filePath } = await dialog.showSaveDialog(state.win, {
-    defaultPath: path.join(state.filePath ? path.dirname(state.filePath) : app.getPath('documents'), `${base}.pdf`),
+function exportTarget(tab, ext) {
+  const base = tab?.filePath ? path.basename(tab.filePath, path.extname(tab.filePath)) : (tab?.name || '제목 없음').replace(/\.md$/, '');
+  return path.join(tab?.filePath ? path.dirname(tab.filePath) : app.getPath('documents'), `${base}.${ext}`);
+}
+
+ipcMain.handle('export:pdf', async (e, tabId) => {
+  const w = winOf(e.sender);
+  const { canceled, filePath } = await dialog.showSaveDialog(w.win, {
+    defaultPath: exportTarget(w.tabs.get(tabId), 'pdf'),
     filters: [{ name: 'PDF', extensions: ['pdf'] }],
   });
   if (canceled || !filePath) return null;
-  const pdf = await state.win.webContents.printToPDF({
+  const pdf = await w.win.webContents.printToPDF({
     pageSize: 'A4',
     printBackground: true,
     margins: { top: 0.6, bottom: 0.6, left: 0.6, right: 0.6 },
@@ -421,11 +493,10 @@ ipcMain.handle('export:pdf', async (e) => {
   return filePath;
 });
 
-ipcMain.handle('export:html', async (e, html) => {
-  const state = stateOf(e.sender);
-  const base = state.filePath ? path.basename(state.filePath, path.extname(state.filePath)) : '제목 없음';
-  const { canceled, filePath } = await dialog.showSaveDialog(state.win, {
-    defaultPath: path.join(state.filePath ? path.dirname(state.filePath) : app.getPath('documents'), `${base}.html`),
+ipcMain.handle('export:html', async (e, tabId, html) => {
+  const w = winOf(e.sender);
+  const { canceled, filePath } = await dialog.showSaveDialog(w.win, {
+    defaultPath: exportTarget(w.tabs.get(tabId), 'html'),
     filters: [{ name: 'HTML', extensions: ['html'] }],
   });
   if (canceled || !filePath) return null;
@@ -433,9 +504,9 @@ ipcMain.handle('export:html', async (e, html) => {
   return filePath;
 });
 
-ipcMain.on('reveal', (e) => {
-  const state = stateOf(e.sender);
-  if (state?.filePath) shell.showItemInFolder(state.filePath);
+ipcMain.on('reveal', (e, tabId) => {
+  const tab = tabOf(e.sender, tabId);
+  if (tab?.filePath) shell.showItemInFolder(tab.filePath);
 });
 
 ipcMain.on('settings:set', (_e, patch) => setSetting(patch));
@@ -444,12 +515,13 @@ ipcMain.on('settings:set', (_e, patch) => setSetting(patch));
 function send(cmd, arg) {
   const win = BrowserWindow.getFocusedWindow();
   if (win) win.webContents.send('menu', cmd, arg);
+  else if (cmd === 'newTab') createWindow();
 }
 function setSetting(patch) {
   Object.assign(settings, patch);
   if ('theme' in patch) nativeTheme.themeSource = settings.theme;
   saveSettings();
-  for (const s of docs.values()) if (!s.win.isDestroyed()) s.win.webContents.send('settings:changed', patch);
+  for (const w of windows.values()) if (!w.win.isDestroyed()) w.win.webContents.send('settings:changed', patch);
   buildMenu();
 }
 
@@ -484,8 +556,9 @@ function buildMenu() {
     {
       label: '파일',
       submenu: [
-        { label: '새 문서', accelerator: 'CmdOrCtrl+N', click: () => createWindow() },
-        { label: '열기…', accelerator: 'CmdOrCtrl+O', click: () => showOpenDialog(focusedState()) },
+        { label: '새 탭', accelerator: 'CmdOrCtrl+N', click: () => send('newTab') },
+        { label: '새 창', accelerator: 'CmdOrCtrl+Shift+N', click: () => createWindow() },
+        { label: '열기…', accelerator: 'CmdOrCtrl+O', click: () => showOpenDialog(targetWindow()) },
         { label: '최근 문서', submenu: recent },
         { type: 'separator' },
         { label: '저장', accelerator: 'CmdOrCtrl+S', click: () => send('save') },
@@ -497,7 +570,9 @@ function buildMenu() {
         { type: 'separator' },
         { label: 'Finder에서 보기', accelerator: 'CmdOrCtrl+Shift+R', click: () => send('reveal') },
         { type: 'separator' },
-        isMac ? { role: 'close', label: '창 닫기' } : { role: 'quit', label: '종료' },
+        { label: '탭 닫기', accelerator: 'CmdOrCtrl+W', click: () => send('closeTab') },
+        { label: '창 닫기', accelerator: 'CmdOrCtrl+Shift+W', click: () => BrowserWindow.getFocusedWindow()?.close() },
+        ...(isMac ? [] : [{ type: 'separator' }, { role: 'quit', label: '종료' }]),
       ],
     },
     {
@@ -565,12 +640,25 @@ function buildMenu() {
         { role: 'toggleDevTools', label: '개발자 도구' },
       ],
     },
-    { role: 'windowMenu', label: '윈도우' },
+    {
+      role: 'window',
+      label: '윈도우',
+      submenu: [
+        { role: 'minimize', label: '최소화' },
+        { role: 'zoom', label: '확대/축소' },
+        { type: 'separator' },
+        { label: '다음 탭', accelerator: 'Ctrl+Tab', click: () => send('nextTab') },
+        { label: '이전 탭', accelerator: 'Ctrl+Shift+Tab', click: () => send('prevTab') },
+        { label: '다음 탭', accelerator: 'CmdOrCtrl+Shift+]', visible: false, acceleratorWorksWhenHidden: true, click: () => send('nextTab') },
+        { label: '이전 탭', accelerator: 'CmdOrCtrl+Shift+[', visible: false, acceleratorWorksWhenHidden: true, click: () => send('prevTab') },
+        ...(isMac ? [{ type: 'separator' }, { role: 'front', label: '모두 앞으로 가져오기' }] : []),
+      ],
+    },
     {
       role: 'help',
       label: '도움말',
       submenu: [
-        { label: '마크다운 문법 예제 열기', click: () => createWindow(null, fs.readFileSync(path.join(__dirname, '..', '..', 'dist', 'sample.md'), 'utf8')) },
+        { label: '마크다운 문법 예제 열기', click: () => openContent(targetWindow(), fs.readFileSync(path.join(__dirname, '..', '..', 'dist', 'sample.md'), 'utf8'), '마크다운 문법 예제') },
       ],
     },
   ];
@@ -600,8 +688,7 @@ if (!app.requestSingleInstanceLock()) {
     buildMenu();
     const argvFiles = process.argv.slice(app.isPackaged ? 1 : 2).filter((a) => fs.existsSync(a) && MD_EXTENSIONS.includes(path.extname(a).slice(1).toLowerCase()));
     const initial = [...pendingOpenPaths, ...argvFiles];
-    if (initial.length) initial.forEach((f) => createWindow(path.resolve(f)));
-    else createWindow();
+    createWindow(initial.map((f) => ({ filePath: path.resolve(f) })));
   });
 }
 

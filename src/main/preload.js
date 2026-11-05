@@ -12,14 +12,19 @@ contextBridge.exposeInMainWorld('api', {
 
   ready: () => ipcRenderer.invoke('renderer-ready'),
 
-  // 문서
-  save: (content, saveAs = false) => ipcRenderer.invoke('doc:save', { content, saveAs }),
-  setDirty: (dirty) => ipcRenderer.send('doc:dirty', dirty),
-  confirmReload: () => ipcRenderer.invoke('doc:confirm-reload'),
+  // 탭
+  newTab: () => ipcRenderer.invoke('tab:new'),
+  tabActivated: (tabId) => ipcRenderer.send('tab:activated', tabId),
+  tabClosed: (tabId) => ipcRenderer.send('tab:closed', tabId),
+  confirmCloseTab: (name) => ipcRenderer.invoke('tab:confirm-close', name),
+
+  // 문서 (모두 탭 단위)
+  save: (tabId, content, saveAs = false) => ipcRenderer.invoke('doc:save', { tabId, content, saveAs }),
+  setDirty: (tabId, dirty) => ipcRenderer.send('doc:dirty', tabId, dirty),
+  confirmReload: (name) => ipcRenderer.invoke('doc:confirm-reload', name),
   openDialog: () => ipcRenderer.invoke('doc:open-dialog'),
   openDropped: (p) => ipcRenderer.invoke('doc:open-dropped', p),
-  newDocument: () => ipcRenderer.invoke('doc:new'),
-  reveal: () => ipcRenderer.send('reveal'),
+  reveal: (tabId) => ipcRenderer.send('reveal', tabId),
 
   // 최근 문서 (폴더 탐색 API는 제공하지 않음)
   recentList: () => ipcRenderer.invoke('recent:list'),
@@ -33,14 +38,15 @@ contextBridge.exposeInMainWorld('api', {
   pathForFile: (file) => webUtils.getPathForFile(file),
 
   // 내보내기
-  exportPdf: () => ipcRenderer.invoke('export:pdf'),
-  exportHtml: (html) => ipcRenderer.invoke('export:html', html),
+  exportPdf: (tabId) => ipcRenderer.invoke('export:pdf', tabId),
+  exportHtml: (tabId, html) => ipcRenderer.invoke('export:html', tabId, html),
 
   // 설정
   setSettings: (patch) => ipcRenderer.send('settings:set', patch),
 
   // 이벤트
   onLoad: (cb) => on('doc:load', cb),
+  onTabActivate: (cb) => on('tab:activate', cb),
   onExternalChange: (cb) => on('doc:external-change', cb),
   onExternalDelete: (cb) => on('doc:external-deleted', cb),
   onMenu: (cb) => on('menu', cb),
