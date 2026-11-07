@@ -1,6 +1,6 @@
 // CodeMirror 6 기반 마크다운 편집기 + 서식 명령
 import { EditorView, keymap, drawSelection, highlightActiveLine, dropCursor, rectangularSelection, crosshairCursor, placeholder } from '@codemirror/view';
-import { EditorState, EditorSelection } from '@codemirror/state';
+import { EditorState, EditorSelection, Prec } from '@codemirror/state';
 import { defaultKeymap, history, historyField, historyKeymap, indentWithTab, undo, redo, selectAll } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
@@ -9,6 +9,7 @@ import { search, searchKeymap, highlightSelectionMatches, openSearchPanel } from
 import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 import { tags as t } from '@lezer/highlight';
 import { handlePaste } from './paste.js';
+import { tableNextCell, tablePrevCell, tableEnter, tableCommand } from './table.js';
 
 // 색은 전부 CSS 변수 → 라이트/다크 전환 시 확장 재구성 불필요
 const mdHighlight = HighlightStyle.define([
@@ -70,6 +71,14 @@ export function createEditor(parent, { onChange, onScroll, onCursor, onPasteFile
         markdown({ base: markdownLanguage, codeLanguages: languages, addKeymap: true }),
         syntaxHighlighting(mdHighlight),
         placeholder(placeholderText),
+        // 표 안에서는 Tab·Shift+Tab·Enter가 셀 이동으로 동작한다 (표 밖이면 평소대로)
+        Prec.high(
+          keymap.of([
+            { key: 'Tab', run: tableNextCell },
+            { key: 'Shift-Tab', run: tablePrevCell },
+            { key: 'Enter', run: tableEnter },
+          ]),
+        ),
         keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, indentWithTab]),
         baseTheme,
         EditorView.updateListener.of((u) => {
@@ -266,6 +275,13 @@ export function applyFormat(view, kind) {
 export function insertPlainText(view, text) {
   view.dispatch(view.state.replaceSelection(text), { userEvent: 'input.paste', scrollIntoView: true });
   view.focus();
+}
+
+/** 서식 → 표 편집 메뉴. 실패하면 사용자에게 보여 줄 문장을 돌려준다 */
+export function editTable(view, op) {
+  const message = tableCommand(view, op);
+  view.focus();
+  return message;
 }
 
 export const editorCommands = {
