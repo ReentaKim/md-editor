@@ -110,8 +110,10 @@ export function createEditor(parent, { onChange, onScroll, onCursor, onPasteFile
 }
 
 /** 탭마다 독립된 편집 상태(문서·커서·실행 취소 기록)를 만든다 */
-export function createState(view, text) {
-  return EditorState.create({ doc: text, extensions: view.mdExtensions });
+export function createState(view, text, selection = null) {
+  const clamp = (n) => Math.min(Math.max(Number(n) || 0, 0), text.length);
+  const sel = selection ? EditorSelection.single(clamp(selection.anchor), clamp(selection.head)) : undefined;
+  return EditorState.create({ doc: text, selection: sel, extensions: view.mdExtensions });
 }
 
 /** 탭을 다른 창으로 옮길 때: 문서·커서·실행 취소 기록을 JSON으로 */
