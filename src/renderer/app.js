@@ -1,5 +1,5 @@
 // MD Editor — renderer 진입점
-import { createEditor, createState, serializeState, deserializeState, revealMatch, replaceDoc, applyFormat, editorCommands, insertPlainText, toggleTaskAtLine } from './editor.js';
+import { createEditor, createState, serializeState, deserializeState, revealMatch, replaceDoc, applyFormat, editTable, editorCommands, insertPlainText, toggleTaskAtLine } from './editor.js';
 import { renderMarkdown, renderMermaid, slugify } from './markdown.js';
 import previewCss from './preview.css';
 
@@ -1008,6 +1008,11 @@ const commands = {
     if (view.contentDOM.contains(a)) return insertPlainText(view, text);
     // 검색창 같은 입력란
     if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')) document.execCommand('insertText', false, text);
+  },
+  table: (op) => {
+    if (prefs.viewMode === 'preview') return toast(shortcut('미리보기 모드에서는 편집할 수 없습니다 (⌘1 / ⌘2)'));
+    const message = editTable(view, op);
+    if (message) toast(message);
   },
   format: (kind) => {
     if (prefs.viewMode === 'preview') return toast(shortcut('미리보기 모드에서는 편집할 수 없습니다 (⌘1 / ⌘2)'));
