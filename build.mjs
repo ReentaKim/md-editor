@@ -1,7 +1,10 @@
 // 렌더러 번들 + 정적 파일/벤더 복사.
 // 오프라인에서도 동작하도록 렌더링 의존성을 모두 dist/ 안에 로컬로 포함시킨다(CDN 사용 안 함).
 import { build } from 'esbuild';
-import { cp, mkdir, rm } from 'node:fs/promises';
+import { cp, mkdir, readFile, rm } from 'node:fs/promises';
+
+// HTML 내보내기가 미리보기와 같은 KaTeX 버전의 CSS를 쓰도록 버전을 번들에 넣는다.
+const katexVersion = JSON.parse(await readFile('node_modules/katex/package.json', 'utf8')).version;
 
 const watch = process.argv.includes('--watch');
 
@@ -28,6 +31,7 @@ const options = {
   minify: !watch,
   sourcemap: watch ? 'inline' : false,
   loader: { '.css': 'text' },
+  define: { __KATEX_VERSION__: JSON.stringify(katexVersion) },
   logLevel: 'info',
 };
 
