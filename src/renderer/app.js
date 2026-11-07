@@ -70,8 +70,12 @@ const view = createEditor(el.editorPane, {
     const size = view.state.doc.length;
     renderTimer = setTimeout(onDocChanged, size > 200_000 ? 400 : size > 30_000 ? 180 : 60);
   },
-  onScroll: () => syncFromEditor(),
+  onScroll: () => {
+    syncFromEditor();
+    scheduleSnapshot();
+  },
   onCursor: (state) => {
+    scheduleSnapshot();
     const pos = state.selection.main.head;
     const line = state.doc.lineAt(pos);
     el.stCursor.textContent = `줄 ${line.number}, 열 ${pos - line.from + 1}`;
@@ -79,6 +83,40 @@ const view = createEditor(el.editorPane, {
   onPasteFiles: (files, pos) => insertImages(files, pos),
   placeholderText: shortcut('여기에 마크다운을 입력하세요…  (⌘O 파일 열기 · 파일을 끌어다 놓아도 됩니다)'),
 });
+
+// ───────────────────────── 세션 기록 ─────────────────────────
+// 탭 목록·커서·스크롤과 저장 안 된 내용을 main에 보내 둔다 → 다시 켜거나 앱이 갑자기 꺼져도 복원
+let snapshotTimer = null;
+function scheduleSnapshot() {
+  clearTimeout(snapshotTimer);
+  snapshotTimer = setTimeout(() => api.sessionUpdate(takeSnapshot()), 800);
+}
+function takeSnapshot() {
+  return {
+    active: doc?.id ?? null,
+    tabs: tabs
+      .map((tab) => {
+        const live = tab === doc;
+        const state = live ? view.state : tab.state;
+        const { anchor, head } = state.selection.main;
+        // 내용은 저장 안 된 탭과 제목 없는 탭만 기록한다 (저장된 파일 탭은 다시 켤 때 디스크에서 읽는다)
+        const content = tab.dirty || !tab.filePath ? state.doc.toString() : '';
+        const keep = tab.dirty || (!tab.filePath && content !== '');
+        return {
+          tabId: tab.id,
+          filePath: tab.filePath,
+          name: tab.name,
+          dirty: tab.dirty,
+          content: keep ? content : null,
+          saved: tab.filePath ? undefined : tab.savedContent,
+          selection: { anchor, head },
+          editorScroll: live ? view.scrollDOM.scrollTop : tab.editorScroll,
+          previewScroll: live ? el.previewPane.scrollTop : tab.previewScroll,
+        };
+      })
+      .filter((t) => t.filePath || t.content),
+  };
+}
 
 function getContent() {
   return view.state.doc.toString();
@@ -470,6 +508,10 @@ function cycleTab(step) {
 // 창 닫기 확인 대화상자에서 main이 호출
 window.__mdEditor = {
   save: (tabId) => save(false, { tabId }),
+  snapshot: () => {
+    clearTimeout(snapshotTimer);
+    return takeSnapshot();
+  },
   activate: (tabId) => activateTab(tabId),
   // 탭을 다른 창으로 옮길 때 main이 호출
   exportTab: (tabId) => {
@@ -520,6 +562,7 @@ function updateHeader() {
 
 // ───────────────────────── 탭 바 ─────────────────────────
 function renderTabs() {
+  scheduleSnapshot();
   el.tabs.replaceChildren(
     ...tabs.map((tab) => {
       const node = document.createElement('div');
@@ -1077,12 +1120,33 @@ api.onTabActivate((tabId) => activateTab(tabId));
 
 // ───────────────────────── 시작 ─────────────────────────
 (async () => {
-  const { settings, tabId, update, updatedTo, version } = await api.ready();
+  const { settings, tabId, restore, update, updatedTo, version } = await api.ready();
   appVersion = version;
   Object.assign(prefs, settings);
   applyPrefs();
-  tabs.push(makeTab(tabId));
-  activateTab(tabId);
+  if (restore) {
+    // 이전 세션의 탭 복원
+    for (const r of restore.tabs) {
+      tabs.push(
+        makeTab(r.tabId, {
+          filePath: r.filePath,
+          name: r.name,
+          dirUrl: r.dirUrl,
+          savedContent: r.savedContent,
+          dirty: r.dirty,
+          state: createState(view, r.content, r.selection),
+          editorScroll: r.editorScroll,
+          previewScroll: r.previewScroll,
+        }),
+      );
+    }
+    activateTab(restore.active);
+    const recovered = restore.tabs.filter((r) => r.dirty).length;
+    if (recovered) toast(`저장하지 않은 문서 ${recovered}개를 복구했습니다`);
+  } else {
+    tabs.push(makeTab(tabId));
+    activateTab(tabId);
+  }
   renderUpdate(update);
   if (updatedTo) toast(`v${updatedTo}(으)로 업데이트했습니다`);
 })();
