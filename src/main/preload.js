@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('api', {
   tabDetach: (tabId) => ipcRenderer.invoke('tab:detach', tabId),
   onTabImport: (cb) => on('tab:import', cb),
   closeWindow: () => ipcRenderer.send('window:close'),
+  sessionUpdate: (snapshot) => ipcRenderer.send('session:update', snapshot),
 
   // 문서 (모두 탭 단위)
   save: (tabId, content, saveAs = false) => ipcRenderer.invoke('doc:save', { tabId, content, saveAs }),

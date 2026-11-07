@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const fsp = fs.promises;
 const { pathToFileURL, fileURLToPath } = require('node:url');
 const updater = require('./updater');
+const session = require('./session');
 
 const MD_EXTENSIONS = ['md', 'markdown', 'mdown', 'mkd', 'mdx', 'txt'];
 const isMac = process.platform === 'darwin';
@@ -34,6 +35,7 @@ const settings = {
   syncScroll: true,
   autosave: false,
   autoUpdateCheck: true,
+  restoreSession: true, // 시작할 때 이전 창·탭 다시 열기 (꺼도 저장 안 된 내용은 복구)
   windowBounds: { width: 1400, height: 900 },
 };
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
@@ -87,6 +89,42 @@ let quitting = false;
 let lastFocused = null; // 앱이 비활성일 때(Finder에서 열기) 사용할 창
 const pendingOpenPaths = []; // 앱 준비 전 Finder "다음으로 열기"로 들어온 파일
 
+// ───────────────────────── 세션 (이전 탭 복원 · 저장 안 된 내용 보존) ─────────────────────────
+/** 세션에 기록할 창. 닫힌 창도 종료 중이었거나 마지막 창이었다면 남겨서 다음 실행 때 복원한다. */
+const sessionWins = [];
+function sessionData() {
+  return {
+    windows: sessionWins
+      .filter((w) => w.snapshot?.tabs?.length)
+      .map((w) => ({ bounds: w.bounds, active: w.snapshot.active, tabs: w.snapshot.tabs })),
+  };
+}
+const writeSessionSoon = () => session.save(sessionData);
+/** 종료가 취소됐거나 새 창을 열 때: 이미 닫힌 창은 세션에서 뺀다 */
+function pruneClosedWindows() {
+  for (let i = sessionWins.length - 1; i >= 0; i--) if (sessionWins[i].closed) sessionWins.splice(i, 1);
+  writeSessionSoon();
+}
+function captureBounds(w) {
+  if (!w.win.isDestroyed()) w.bounds = w.win.getNormalBounds();
+}
+const withTimeout = (promise, ms) => Promise.race([promise, new Promise((r) => setTimeout(() => r(null), ms))]);
+
+/**
+ * 창을 닫은 뒤의 세션 정리: 저장한 탭은 "저장됨"으로, "저장 안 함"을 고른 탭은 내용을 버린다
+ * (제목 없는 탭이면 아예 뺀다). 그래야 다시 켰을 때 버린 내용이 되살아나지 않는다.
+ */
+function finalizeSnapshot(w, discarded) {
+  if (!w.snapshot) return;
+  w.snapshot.tabs = w.snapshot.tabs
+    .filter((t) => !(discarded.has(t.tabId) && !w.tabs.get(t.tabId)?.filePath))
+    .map((t) => {
+      const tab = w.tabs.get(t.tabId);
+      if (!tab || (!discarded.has(t.tabId) && tab.dirty)) return t;
+      return { ...t, filePath: tab.filePath, name: tabName(tab), dirty: false, content: tab.filePath ? null : t.content, saved: tab.filePath ? undefined : t.content };
+    });
+}
+
 const winOf = (sender) => windows.get(sender.id);
 const tabOf = (sender, tabId) => winOf(sender)?.tabs.get(tabId);
 function targetWindow() {
@@ -108,12 +146,15 @@ function reusableTab(w) {
 }
 
 /** @param {Array<{filePath?:string, content?:string, name?:string}>} queue 창이 준비되면 열 문서들 */
-function createWindow(queue = [], position = null) {
+/** @param {{restore?:Array, active?:number, bounds?:object}|null} restore 세션 복원용 탭과 창 위치 */
+function createWindow(queue = [], position = null, restore = null) {
   const focused = BrowserWindow.getFocusedWindow();
   const { width, height } = settings.windowBounds;
+  const bounds = restore?.bounds && onScreen(restore.bounds) ? restore.bounds : null;
   const win = new BrowserWindow({
-    width,
-    height,
+    width: bounds?.width ?? width,
+    height: bounds?.height ?? height,
+    ...(bounds ? { x: bounds.x, y: bounds.y } : {}),
     minWidth: 760,
     minHeight: 480,
     show: false,
@@ -129,7 +170,9 @@ function createWindow(queue = [], position = null) {
       spellcheck: false,
     },
   });
-  if (position) {
+  if (bounds) {
+    /* 세션에 기록된 위치 그대로 */
+  } else if (position) {
     // 탭을 창 밖으로 끌어 놓은 위치에 새 창을 띄운다(커서가 탭 바 근처에 오도록)
     win.setPosition(Math.round(position.x - 160), Math.round(position.y - 60));
   } else if (focused) {
@@ -138,9 +181,11 @@ function createWindow(queue = [], position = null) {
   }
 
   /** @type {WinState} */
-  const w = { win, tabs: new Map(), activeTab: null, ready: false, queue, forceClose: false };
+  const w = { win, tabs: new Map(), activeTab: null, ready: false, queue, forceClose: false, restore, snapshot: null, bounds: null, closed: false };
   const id = win.webContents.id;
   windows.set(id, w);
+  pruneClosedWindows();
+  sessionWins.push(w);
 
   win.loadFile(path.join(__dirname, '..', '..', 'dist', 'index.html'));
   // 테스트 실행(MD_EDITOR_USER_DATA) 때는 사용자가 쓰던 앱의 포커스를 빼앗지 않는다
@@ -168,26 +213,34 @@ function createWindow(queue = [], position = null) {
   // 창을 닫을 때: 저장 안 된 탭마다 차례로 확인
   win.on('close', async (e) => {
     if (w.forceClose) return;
-    const dirtyTabs = [...w.tabs.values()].filter((t) => t.dirty);
-    if (!dirtyTabs.length) return;
     e.preventDefault();
+    // 닫기 직전의 탭 상태를 세션에 남긴다 (렌더러가 응답하지 않아도 닫기는 막지 않음)
+    const snap = await withTimeout(win.webContents.executeJavaScript('window.__mdEditor.snapshot()').catch(() => null), 1000);
+    if (snap) w.snapshot = snap;
+    captureBounds(w);
+    const dirtyTabs = [...w.tabs.values()].filter((t) => t.dirty);
+    const discarded = new Set();
     for (const t of dirtyTabs) {
       await win.webContents.executeJavaScript(`window.__mdEditor.activate(${t.id})`).catch(() => {});
       const answer = await confirmClose(win, tabName(t));
       if (answer === 'cancel') {
         quitting = false;
         updater.quitCancelled();
+        pruneClosedWindows();
         return;
       }
+      if (answer === 'discard') discarded.add(t.id);
       if (answer === 'save') {
         const saved = await win.webContents.executeJavaScript(`window.__mdEditor.save(${t.id})`).catch(() => false);
         if (!saved) {
           quitting = false;
           updater.quitCancelled();
+          pruneClosedWindows();
           return;
         }
       }
     }
+    finalizeSnapshot(w, discarded);
     w.forceClose = true;
     win.close();
     if (quitting) app.quit();
@@ -197,6 +250,12 @@ function createWindow(queue = [], position = null) {
     for (const t of w.tabs.values()) unwatch(t);
     windows.delete(id);
     if (lastFocused === w) lastFocused = null;
+    // 다른 창이 남아 있는데 이 창만 닫았다면 세션에서 뺀다.
+    // 종료 중이거나 마지막 창이면 남겨 두어 다음 실행 때 다시 연다.
+    w.closed = true;
+    const at = sessionWins.indexOf(w);
+    if (!quitting && windows.size > 0 && at >= 0) sessionWins.splice(at, 1);
+    writeSessionSoon();
   });
 
   return w;
@@ -378,8 +437,17 @@ function openLink(url) {
 // ───────────────────────── IPC ─────────────────────────
 ipcMain.handle('renderer-ready', (e) => {
   const w = winOf(e.sender);
-  const first = newTab(w);
-  w.activeTab = first.id;
+  // 세션 복원: 기록된 탭들을 다시 만든다
+  const restored = (w.restore?.tabs ?? []).map((item) => {
+    const tab = newTab(w);
+    Object.assign(tab, { filePath: item.filePath, name: item.name, dirty: item.dirty, diskContent: item.disk ?? null, blank: false });
+    if (tab.filePath) watch(tab);
+    return { ...item, disk: undefined, tabId: tab.id };
+  });
+  const activeIndex = Math.max(0, w.restore?.tabs.findIndex((t) => t.oldId === w.restore.active) ?? 0);
+  w.restore = null;
+  const first = restored.length ? null : newTab(w);
+  w.activeTab = first ? first.id : restored[activeIndex].tabId;
   w.ready = true;
   // 응답이 먼저 도착하도록 다음 틱에 대기 중인 문서를 연다
   setImmediate(async () => {
@@ -392,7 +460,8 @@ ipcMain.handle('renderer-ready', (e) => {
   updateTitle(w);
   return {
     settings: { viewMode: settings.viewMode, sidebar: settings.sidebar, syncScroll: settings.syncScroll, autosave: settings.autosave, theme: settings.theme },
-    tabId: first.id,
+    tabId: first?.id ?? null,
+    restore: restored.length ? { tabs: restored, active: w.activeTab } : null,
     version: app.getVersion(),
     update: updater.publicState(),
     updatedTo: updater.takeInstalledNotice(),
@@ -426,6 +495,13 @@ ipcMain.on('tab:closed', (e, tabId) => {
   updateTitle(w);
 });
 ipcMain.on('window:close', (e) => winOf(e.sender)?.win.close());
+ipcMain.on('session:update', (e, snap) => {
+  const w = winOf(e.sender);
+  if (!w || w.forceClose || !snap || !Array.isArray(snap.tabs)) return;
+  w.snapshot = snap;
+  captureBounds(w);
+  writeSessionSoon();
+});
 // ───────────────────────── 탭을 다른 창으로 옮기기 ─────────────────────────
 let tabDrag = null; // { w, tabId } — 탭 끌기가 진행 중일 때
 
@@ -709,6 +785,12 @@ function buildMenu() {
         { label: '저장', accelerator: 'CmdOrCtrl+S', click: () => send('save') },
         { label: '다른 이름으로 저장…', accelerator: 'CmdOrCtrl+Shift+S', click: () => send('saveAs') },
         { label: '자동 저장', type: 'checkbox', checked: settings.autosave, click: (item) => setSetting({ autosave: item.checked }) },
+        {
+          label: '시작할 때 이전 탭 다시 열기',
+          type: 'checkbox',
+          checked: settings.restoreSession !== false,
+          click: (item) => setSetting({ restoreSession: item.checked }),
+        },
         { type: 'separator' },
         { label: 'PDF로 내보내기…', accelerator: 'CmdOrCtrl+P', click: () => send('exportPdf') },
         { label: 'HTML로 내보내기…', accelerator: 'CmdOrCtrl+Shift+E', click: () => send('exportHtml') },
@@ -841,6 +923,70 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+// ───────────────────────── 세션 복원 ─────────────────────────
+/** 창 위치가 지금 연결된 화면 안에 있는지 (모니터를 뺀 경우 대비) */
+function onScreen(b) {
+  if (![b?.x, b?.y, b?.width, b?.height].every(Number.isFinite)) return false;
+  return screen.getAllDisplays().some(({ workArea: a }) => b.x + 80 > a.x && b.x + 80 < a.x + a.width && b.y + 20 >= a.y && b.y + 20 < a.y + a.height);
+}
+
+/**
+ * 기록된 탭을 복원할 수 있는 형태로 준비한다.
+ * - 파일 탭: 디스크에서 다시 읽는다. 저장 안 된 내용이 있었다면 그 내용을 편집기에 싣는다.
+ * - 파일이 사라졌는데 저장 안 된 내용이 있으면 제목 없는 탭으로 살린다. 내용이 없으면 건너뛴다.
+ * - all=false(설정 꺼짐)면 저장 안 된 내용이 있는 탭만 복원한다.
+ */
+async function prepareTabs(tabs, all) {
+  const out = [];
+  for (const t of tabs ?? []) {
+    const hasContent = typeof t.content === 'string';
+    const base = { oldId: t.tabId, selection: t.selection, editorScroll: t.editorScroll || 0, previewScroll: t.previewScroll || 0 };
+    if (t.filePath) {
+      if (!all && !(hasContent && t.dirty)) continue;
+      let disk = null;
+      try {
+        disk = await fsp.readFile(t.filePath, 'utf8');
+      } catch {
+        /* 파일이 사라졌거나 읽을 수 없음 */
+      }
+      if (disk != null) {
+        const content = hasContent ? t.content : disk;
+        out.push({
+          ...base,
+          filePath: t.filePath,
+          name: path.basename(t.filePath),
+          dirUrl: pathToFileURL(path.dirname(t.filePath) + path.sep).href,
+          content,
+          savedContent: disk,
+          disk,
+          dirty: content !== disk,
+        });
+      } else if (hasContent && t.content !== '') {
+        out.push({ ...base, filePath: null, name: path.basename(t.filePath), dirUrl: null, content: t.content, savedContent: '', dirty: true });
+      }
+    } else if (hasContent && t.content !== '') {
+      const saved = typeof t.saved === 'string' ? t.saved : '';
+      const dirty = t.content !== saved;
+      if (!all && !dirty) continue;
+      out.push({ ...base, filePath: null, name: t.name || '제목 없음', dirUrl: null, content: t.content, savedContent: saved, dirty });
+    }
+  }
+  return out;
+}
+
+/** 시작할 때: 이전 세션의 창·탭을 다시 열고, 함께 열 파일(Finder·명령줄)은 첫 창에 연다 */
+async function restoreSession(initial) {
+  const all = settings.restoreSession !== false;
+  const saved = session.load();
+  const plans = [];
+  for (const sw of saved?.windows ?? []) {
+    const tabs = await prepareTabs(sw.tabs, all);
+    if (tabs.length) plans.push({ tabs, active: sw.active, bounds: all ? sw.bounds : null });
+  }
+  if (!plans.length) return void createWindow(initial);
+  plans.forEach((plan, i) => createWindow(i === 0 ? initial : [], null, plan));
+}
+
 // ───────────────────────── 앱 생명주기 ─────────────────────────
 // open-file은 ready 이전에 올 수 있으므로 최상위에서 등록한다.
 app.on('open-file', (e, filePath) => {
@@ -864,14 +1010,18 @@ if (!app.requestSingleInstanceLock()) {
     buildMenu();
     updater.init({ settings });
     const argvFiles = process.argv.slice(app.isPackaged ? 1 : 2).filter((a) => fs.existsSync(a) && MD_EXTENSIONS.includes(path.extname(a).slice(1).toLowerCase()));
-    const initial = [...pendingOpenPaths, ...argvFiles];
-    createWindow(initial.map((f) => ({ filePath: path.resolve(f) })));
+    const initial = [...pendingOpenPaths, ...argvFiles].map((f) => ({ filePath: path.resolve(f) }));
+    restoreSession(initial).catch((err) => {
+      console.error('세션 복원 실패', err);
+      if (!windows.size) createWindow(initial);
+    });
   });
 }
 
 app.on('before-quit', () => {
   quitting = true;
 });
+app.on('will-quit', () => session.flush());
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
