@@ -77,6 +77,7 @@
     "@codemirror/search": "^6.7.2",
     "@codemirror/state": "^6.7.6",
     "@codemirror/view": "^6.43.15",
+    "@joplin/turndown-plugin-gfm": "^1.0.68",
     "@lezer/highlight": "^1.2.5",
     "@vscode/markdown-it-katex": "^1.1.2",
     "codemirror": "^6.0.2",
@@ -92,7 +93,8 @@
     "markdown-it-deflist": "^4.0.0",
     "markdown-it-footnote": "^4.0.0",
     "markdown-it-task-lists": "^2.1.1",
-    "mermaid": "^12.3.0"
+    "mermaid": "^12.3.0",
+    "turndown": "^7.2.5"
   },
   "overrides": {
     "@vscode/markdown-it-katex": {
