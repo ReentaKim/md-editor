@@ -902,7 +902,7 @@ async function exportHtml() {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(doc.name.replace(/\.[^.]+$/, ''))}</title>
-${hasMath ? '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.25/dist/katex.min.css">' : ''}
+${hasMath ? `<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@${__KATEX_VERSION__}/dist/katex.min.css">` : ''}
 <style>
 ${previewCss}
 body { margin: 0; background: var(--md-bg); }

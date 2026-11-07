@@ -365,8 +365,10 @@ function openLink(url) {
       shell.openExternal(url);
     } else if (u.protocol === 'file:') {
       const p = fileURLToPath(u);
+      // 문서 속 링크로 실행 파일(.app, .command 등)이 바로 실행되지 않도록,
+      // 마크다운이 아닌 파일은 열지 않고 Finder/탐색기에서 위치만 보여 준다.
       if (isMarkdownPath(p)) openPath(p);
-      else shell.openPath(p);
+      else shell.showItemInFolder(p);
     }
   } catch {
     /* 잘못된 URL 무시 */
