@@ -312,7 +312,7 @@ async function openPath(filePath, w = targetWindow(), reveal = null) {
       }
     }
   }
-  if (!w || w.win.isDestroyed()) return void createWindow([{ filePath }]);
+  if (!w || w.win.isDestroyed()) return void openWindow([{ filePath }]);
   if (!w.ready) return void w.queue.push({ filePath });
   if (!process.env.MD_EDITOR_USER_DATA) {
     w.win.show();
@@ -344,7 +344,7 @@ async function loadInto(tab, filePath) {
 
 /** 파일이 아닌 내용(예: 문법 예제)을 새 탭으로 */
 function openContent(w, content, name) {
-  if (!w || w.win.isDestroyed()) return void createWindow([{ content, name }]);
+  if (!w || w.win.isDestroyed()) return void openWindow([{ content, name }]);
   if (!w.ready) return void w.queue.push({ content, name });
   const tab = reusableTab(w) ?? newTab(w);
   Object.assign(tab, { blank: false, name });
@@ -729,7 +729,7 @@ ipcMain.on('settings:set', (_e, patch) => setSetting(patch));
 function send(cmd, arg) {
   const win = BrowserWindow.getFocusedWindow();
   if (win) win.webContents.send('menu', cmd, arg);
-  else if (cmd === 'newTab') createWindow();
+  else if (cmd === 'newTab') openWindow();
 }
 function setSetting(patch) {
   Object.assign(settings, patch);
@@ -1005,6 +1005,24 @@ async function restoreSession(initial) {
   plans.forEach((plan, i) => createWindow(i === 0 ? initial : [], null, plan));
 }
 
+/**
+ * 창이 하나도 없을 때 창 열기. Mac에서는 마지막 창을 닫아도 앱이 계속 실행되므로,
+ * Dock 아이콘을 누르거나 파일을 열 때 닫았던 창의 탭을 다시 연다.
+ * 이미 창이 있으면 그냥 새 창.
+ */
+let reopening = null;
+function openWindow(queue = []) {
+  if (windows.size) return void createWindow(queue);
+  if (reopening) return void reopening.then(() => (queue.length ? queue.forEach((q) => (q.filePath ? openPath(q.filePath) : openContent(targetWindow(), q.content, q.name))) : null));
+  session.flush(); // 닫을 때 기록한 내용을 먼저 파일에 쓴다
+  reopening = restoreSession(queue)
+    .catch((err) => {
+      console.error('창 복원 실패', err);
+      if (!windows.size) createWindow(queue);
+    })
+    .finally(() => (reopening = null));
+}
+
 // ───────────────────────── 앱 생명주기 ─────────────────────────
 // open-file은 ready 이전에 올 수 있으므로 최상위에서 등록한다.
 app.on('open-file', (e, filePath) => {
@@ -1019,6 +1037,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', (_e, argv) => {
     const files = argv.slice(1).filter((a) => MD_EXTENSIONS.includes(path.extname(a).slice(1).toLowerCase()));
     if (files.length) files.forEach((f) => openPath(f));
+    else if (!windows.size) openWindow();
     else BrowserWindow.getAllWindows()[0]?.focus();
   });
 
@@ -1041,7 +1060,7 @@ app.on('before-quit', () => {
 });
 app.on('will-quit', () => session.flush());
 app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  if (BrowserWindow.getAllWindows().length === 0) openWindow();
 });
 app.on('window-all-closed', () => {
   if (!isMac) app.quit();
