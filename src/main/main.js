@@ -1,6 +1,6 @@
 // MD Editor — main process
 // 창 1개 = 탭 여러 개. 탭마다 파일 경로/변경 여부/파일 감시 상태를 main에서 관리한다.
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell, nativeTheme, screen } = require('electron');
+const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, shell, nativeTheme, screen } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const fsp = fs.promises;
@@ -729,6 +729,7 @@ function buildMenu() {
         { role: 'cut', label: '오려두기' },
         { role: 'copy', label: '복사하기' },
         { role: 'paste', label: '붙여넣기' },
+        { label: '서식 없이 붙여넣기', accelerator: 'CmdOrCtrl+Shift+V', click: () => send('pastePlain', clipboard.readText()) },
         { label: '전체 선택', accelerator: 'CmdOrCtrl+A', click: () => send('selectAll') },
         { type: 'separator' },
         { label: '찾기 / 바꾸기', accelerator: 'CmdOrCtrl+F', click: () => send('find') },

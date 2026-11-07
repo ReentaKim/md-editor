@@ -1,7 +1,7 @@
 {
   "name": "md-editor",
   "productName": "MD Editor",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "description": "로컬 설치형 마크다운 편집기 (Mac · Windows / 탭 · 실시간 미리보기 · PDF/HTML 내보내기)",
   "main": "src/main/main.js",
   "author": "ReentaKim <reenta.kim@gmail.com>",
@@ -77,6 +77,7 @@
     "@codemirror/search": "^6.7.2",
     "@codemirror/state": "^6.7.6",
     "@codemirror/view": "^6.43.15",
+    "@joplin/turndown-plugin-gfm": "^1.0.68",
     "@lezer/highlight": "^1.2.5",
     "@vscode/markdown-it-katex": "^1.1.2",
     "codemirror": "^6.0.2",
@@ -92,7 +93,8 @@
     "markdown-it-deflist": "^4.0.0",
     "markdown-it-footnote": "^4.0.0",
     "markdown-it-task-lists": "^2.1.1",
-    "mermaid": "^12.3.0"
+    "mermaid": "^12.3.0",
+    "turndown": "^7.2.5"
   },
   "overrides": {
     "@vscode/markdown-it-katex": {

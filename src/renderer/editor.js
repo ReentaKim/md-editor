@@ -8,6 +8,7 @@ import { syntaxHighlighting, HighlightStyle, bracketMatching, indentOnInput } fr
 import { search, searchKeymap, highlightSelectionMatches, openSearchPanel } from '@codemirror/search';
 import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 import { tags as t } from '@lezer/highlight';
+import { handlePaste } from './paste.js';
 
 // 색은 전부 CSS 변수 → 라이트/다크 전환 시 확장 재구성 불필요
 const mdHighlight = HighlightStyle.define([
@@ -77,12 +78,19 @@ export function createEditor(parent, { onChange, onScroll, onCursor, onPasteFile
         }),
         EditorView.domEventHandlers({
           scroll: () => onScroll?.(),
-          paste: (e) => {
+          paste: (e, v) => {
             const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'));
-            if (!files.length) return false;
-            e.preventDefault();
-            onPasteFiles?.(files, null);
-            return true;
+            if (files.length) {
+              e.preventDefault();
+              onPasteFiles?.(files, null);
+              return true;
+            }
+            // 서식 있는 글 → 마크다운, 선택한 글자 + URL → 링크
+            if (handlePaste(v, e.clipboardData)) {
+              e.preventDefault();
+              return true;
+            }
+            return false;
           },
           drop: (e, v) => {
             const files = [...(e.dataTransfer?.files || [])];
@@ -250,6 +258,12 @@ export function applyFormat(view, kind) {
       return insertBlock(view, '| 항목 | 내용 | 비고 |\n| --- | --- | --- |\n| 셀 | 셀 | 셀 |\n| 셀 | 셀 | 셀 |', 2, 2);
     default:
   }
+}
+
+/** 서식 없이 붙여넣기: 마크다운 변환·링크 만들기 없이 텍스트 그대로 */
+export function insertPlainText(view, text) {
+  view.dispatch(view.state.replaceSelection(text), { userEvent: 'input.paste', scrollIntoView: true });
+  view.focus();
 }
 
 export const editorCommands = {
